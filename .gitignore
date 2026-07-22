@@ -1,0 +1,31 @@
+# ---- .NET / C# ----
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Azure Functions local settings (contains connection strings/secrets)
+local.settings.json
+
+# ---- Terraform ----
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ---- macOS ----
+.DS_Store
+
+# ---- Editors ----
+.idea/
+.vscode/
+*.swp
