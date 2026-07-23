@@ -44,9 +44,8 @@ with what actually happened to inventory and payment.
 > sense. Nothing here changes the architecture described above; it only
 > pins down what it runs on.
 
-**Language / runtime:** C# on .NET (latest LTS at implementation time).
-Each of the four services (Order, Inventory, Payment, Fulfillment) is a
-separate .NET service/process.
+**Language / runtime:** C# on .NET 10 (LTS). Each of the four services
+(Order, Inventory, Payment, Fulfillment) is a separate .NET service/process.
 
 **Cloud platform:** Azure.
 - Compute: Azure Container Apps running each service as an independent
@@ -81,7 +80,6 @@ separate .NET service/process.
   service and service-to-bus auth), and secrets (Azure Key Vault)
 
 **Explicitly not decided here (deferred to Plan phase):**
-- Exact .NET version
 - Project layout (solution structure, one repo vs. multiple)
 
 ## Non-Functional Requirements
