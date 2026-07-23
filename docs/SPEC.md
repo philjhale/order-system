@@ -448,9 +448,9 @@ service's own Azure SQL database, not a shared one.
 | UpdatedAt | DateTimeOffset | Last modification time |
 
 `InventoryReservations` (per-order record of what was reserved — required
-so `OrderCancelled` can release the exact quantities it reserved, and so a
-redelivered `OrderCreated` can be recognized as already-reserved rather than
-double-decrementing `InventoryItems`)
+so `OrderCancelled` can release the exact quantities it reserved. Rows are
+deleted on release, so this table alone cannot answer "was this order ever
+processed" once released — see `InventoryOrderOutcomes` below for that.)
 
 | Column | Type | Purpose |
 |---|---|---|
@@ -458,6 +458,22 @@ double-decrementing `InventoryItems`)
 | ProductId | string | Part of primary key; which SKU was reserved |
 | Quantity | int | Quantity reserved for this order/product, to restore on release |
 | ReservedAt | DateTimeOffset | Reservation timestamp |
+
+`InventoryOrderOutcomes` (permanent, never-deleted record of the outcome of
+processing one `OrderCreated` per order — the actual idempotency guard.
+`InventoryReservations` rows are deleted on release, so checking only that
+table can't tell a never-reserved order apart from a released one; a
+redelivered `OrderCreated` arriving after release would then be
+re-processed, decrementing stock a second time with no reservation left to
+release it, since Order Service already considers that order terminally
+`CANCELLED`. This table is checked first, before the `InventoryReservations`
+check, and is never cleaned up.)
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Primary key; which order this outcome is for |
+| Outcome | string | `Reserved` or `OutOfStock` — the result the first (and only) time this order's `OrderCreated` was processed |
+| ProcessedAt | DateTimeOffset | When this outcome was recorded |
 
 **Payment Service**
 

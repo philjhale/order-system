@@ -239,25 +239,35 @@ state before the next phase starts.
    can create the resource group itself in task 5's first CI run. Store its
    client/tenant/subscription IDs as GitHub repo secrets/vars — every job
    below depends on this identity existing, so it's a prerequisite step of
-   this task, not a separate one. Then: reusable
-   GitHub Actions workflow (`azure/login` using that OIDC credential, build
-   + test on PR, `docker build`/`docker push` to the shared ACR, `terraform
-   plan`/`apply` job), plus the `terraform plan`/`apply` job for `shared/`
-   itself. Each subsequent service phase adds its own thin workflow file
-   (e.g. `order-service-ci.yml`) that's `paths`-filtered to only
-   `services/order-service/**` and calls this reusable workflow with that
-   service's folder as a parameter — so a change confined to one service
-   folder never triggers another service's build/test/deploy. When a single
-   PR touches two service Terraform folders at once (a later phase's task
-   adding both a new topic-owning service and Order Service's subscription
-   to it — see tasks 14/17/19), the subscribing service's `terraform apply`
-   job declares `needs:` on the topic-owning service's `terraform apply`
-   job in that PR's workflow run, so the topic always exists before the
-   subscription referencing it is applied.
+   this task, not a separate one. Then: a reusable *callable* workflow
+   (`workflow_call`) per service action (`azure/login` using that OIDC
+   credential, build + test, `docker build`/`docker push` to the shared ACR,
+   `terraform plan`/`apply`), plus the `terraform plan`/`apply` job for
+   `shared/` itself. Rather than one independently-triggered top-level
+   workflow file per service — which cannot express a `needs:` dependency
+   on another service's job, since GitHub Actions' `needs:` only orders jobs
+   *within the same workflow run*, never across separate workflow files —
+   there is a single top-level orchestrating workflow
+   (`.github/workflows/ci.yml`) triggered on every PR and every push to
+   `main`. It detects which `services/<name>/**` paths changed (e.g. via
+   `dorny/paths-filter`) and, for each affected service, calls that
+   service's reusable workflow as a job, `paths`-filtering only in the sense
+   of skipping jobs whose service folder didn't change — every service's
+   job still lives in the one workflow run for that commit/PR, so cross-
+   service `needs:` is always available. When a single PR touches two
+   service Terraform folders at once (a later phase's task adding both a
+   new topic-owning service and Order Service's subscription to it — see
+   tasks 14/17/19), the subscribing service's `terraform apply` job declares
+   `needs:` on the topic-owning service's `terraform apply` job — both jobs
+   now genuinely exist in the same workflow run, so this ordering is
+   actually enforceable, unlike a per-service-file structure.
    - *Verify:* a PR-triggered run (build/test/`terraform plan`) and a
      post-merge run on `main` (`terraform apply`/deploy) both authenticate
      successfully via their respective OIDC credential (no stored
-     long-lived Azure credentials anywhere in the repo/secrets).
+     long-lived Azure credentials anywhere in the repo/secrets); a PR
+     touching two service folders at once produces one workflow run with
+     both services' jobs and the `needs:` ordering between them visibly
+     enforced in the run's job graph.
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
 7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
@@ -316,7 +326,16 @@ state before the next phase starts.
     *repo root*, not the service folder, so it can `COPY` the `shared/`
     projects it references); `services/order-service/infra/terraform/`:
     Container App (image pulled from the shared ACR's `order-service`
-    repository), Azure SQL Serverless DB, and the topics Order *owns*
+    repository; `min_replicas = 1` — Order Service is also a Service Bus
+    consumer of `InventoryReserved`/`InventoryFailed`/`PaymentCompleted`/
+    `PaymentFailed`/`InventoryReleased`/`OrderShipped`/`OrderDelivered`
+    (task 9), and Container Apps' default scaling only reacts to HTTP
+    traffic; between HTTP calls (the common case — a customer places an
+    order, then the async pipeline runs with no further HTTP activity) it
+    would scale to zero and never wake to consume those events, leaving the
+    order stuck in `CREATED` forever. Same reasoning as Inventory/Payment/
+    Fulfillment's `min_replicas = 1` in tasks 14/17/19), Azure SQL Serverless
+    DB, and the topics Order *owns*
     (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job builds
     the image, pushes to ACR tagged with the commit SHA, runs EF Core
     migrations against the SQL DB (dedicated CI/CD job step, before the new
@@ -338,37 +357,54 @@ the in-memory bus in tests) standing in for the other services. Confirm
 before starting Phase 2.
 
 ### Phase 2 — Inventory Service
-11. **Inventory domain + persistence** — `InventoryItems` table and the
+11. **Inventory domain + persistence** — `InventoryItems` table, the
     `InventoryReservations` table (per-order/per-product record of what was
-    reserved — the source of truth for both idempotency-checking and for
-    exactly what to restore on release; see Data Model). `DbContext` uses
-    `EnableRetryOnFailure()` (same reason as task 7 — Serverless auto-pause).
-12. **Reserve on `OrderCreated`** — for each item, an atomic conditional
-    update (`UPDATE InventoryItems SET Available = Available - @qty WHERE
-    ProductId = @p AND Available >= @qty`, single DB transaction) so two
-    concurrent orders can't both win the last unit; before reserving, check
-    for an existing `InventoryReservations` row for this `orderId` and
-    no-op/re-publish the prior outcome if found (idempotency — a
-    redelivered `OrderCreated` can't double-decrement). On success across
-    every line, write one `InventoryReservations` row per item and publish
-    `InventoryReserved { orderId, totalAmount, paymentMethod }` — the latter
-    two fields are carried through unchanged from `OrderCreated`'s payload,
-    since Inventory Service has no use for them itself and Payment Service
-    (which consumes `InventoryReserved` next) has no other way to learn
-    what to charge; on any line failing, roll back the transaction and
-    publish `InventoryFailed { reason: OutOfStock }` (no stock touched, no
-    reservation rows written).
+    reserved, deleted on release — the source of truth for exactly what to
+    restore), and the `InventoryOrderOutcomes` table (permanent, one row per
+    order, never deleted — the actual idempotency guard; see Data Model for
+    why `InventoryReservations` alone can't serve that role once a
+    reservation is released). `DbContext` uses `EnableRetryOnFailure()`
+    (same reason as task 7 — Serverless auto-pause).
+12. **Reserve on `OrderCreated`** — first, check `InventoryOrderOutcomes` for
+    an existing row for this `orderId`; if found, no-op/re-publish that
+    row's recorded outcome (`InventoryReserved` or `InventoryFailed`) instead
+    of processing again — this is the only idempotency check, and it must
+    run before touching `InventoryItems`/`InventoryReservations`, because a
+    redelivered `OrderCreated` can arrive *after* the order was already
+    reserved-then-released-then-cancelled, by which point
+    `InventoryReservations` has no row left to detect that. If no outcome
+    row exists, proceed: for each item, an atomic conditional update (`UPDATE
+    InventoryItems SET Available = Available - @qty WHERE ProductId = @p AND
+    Available >= @qty`, single DB transaction) so two concurrent orders
+    can't both win the last unit. On success across every line, write one
+    `InventoryReservations` row per item, write an `InventoryOrderOutcomes`
+    row `{ orderId, Outcome: Reserved }`, and publish `InventoryReserved {
+    orderId, totalAmount, paymentMethod }` — the latter two fields are
+    carried through unchanged from `OrderCreated`'s payload, since Inventory
+    Service has no use for them itself and Payment Service (which consumes
+    `InventoryReserved` next) has no other way to learn what to charge; on
+    any line failing, roll back the `InventoryItems`/`InventoryReservations`
+    changes, write an `InventoryOrderOutcomes` row `{ orderId, Outcome:
+    OutOfStock }`, and publish `InventoryFailed { reason: OutOfStock }`.
     - *Verify:* unit test — order with one out-of-stock item reserves
-      nothing and publishes `InventoryFailed`; concurrent orders for the
-      same last unit never both succeed (NFR: no overselling); re-delivering
-      the same `OrderCreated` after a successful reservation does not
-      decrement `Available` a second time.
+      nothing, writes an `OutOfStock` outcome row, and publishes
+      `InventoryFailed`; concurrent orders for the same last unit never both
+      succeed (NFR: no overselling); re-delivering the same `OrderCreated`
+      after a successful reservation does not decrement `Available` a
+      second time; re-delivering the same `OrderCreated` *after* its
+      reservation has since been released (`OrderCancelled` already
+      processed, `InventoryReservations` rows already deleted) is still a
+      no-op — it must not re-decrement `Available` or write a new
+      reservation, because the `InventoryOrderOutcomes` row is still there.
 13. **Release on `OrderCancelled`** — read the order's `InventoryReservations`
     rows to get the exact product/quantity pairs to restore, add them back
     to `InventoryItems.Available`, delete the reservation rows, publish
     `InventoryReleased`; no-ops if no reservation rows exist for that order
     (idempotent, and safe against `OrderCancelled` arriving for an order
-    that was never reserved, i.e. the `InventoryFailed` path).
+    that was never reserved, i.e. the `InventoryFailed` path). The
+    `InventoryOrderOutcomes` row is *not* deleted here — it must survive
+    release permanently so a much-later redelivery of the same
+    `OrderCreated` is still recognized as already-processed (task 12).
 14. **Inventory Service Dockerfile, Terraform + deploy** —
     `services/inventory-service/Dockerfile` (same repo-root-build-context
     pattern as Order Service's); `services/inventory-service/infra/terraform/`:
