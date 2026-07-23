@@ -7,54 +7,81 @@ sections.
 
 ## Project layout decision (deferred to this phase by the spec)
 
-**Single repo, single .NET solution.** `OrderSystem.sln` at repo root, with:
+**Single repo, one self-contained folder per service** — each service owns
+its own `.sln`, `src/`, `tests/`, Terraform, and `Dockerfile`, so it reads
+and builds like a standalone project even though it lives in the monorepo:
 
 ```
-src/
+shared/
   OrderSystem.Contracts/        # shared event DTOs + enums (OrderStatus, PaymentStatus)
   OrderSystem.Messaging/        # IEventPublisher/IEventSubscriber abstraction
                                  #   + Azure Service Bus impl + in-memory impl (for tests/local dev)
-  OrderSystem.OrderService/
-    Dockerfile                  # multi-stage build, repo root as build context
-  OrderSystem.InventoryService/
+services/
+  order-service/
+    OrderSystem.OrderService.sln
+    src/OrderSystem.OrderService/
+    tests/OrderSystem.OrderService.Tests/
+    infra/terraform/             # Order Container App, Order SQL DB, Order-owned topics
     Dockerfile
-  OrderSystem.PaymentService/
+  inventory-service/
+    OrderSystem.InventoryService.sln
+    src/OrderSystem.InventoryService/
+    tests/OrderSystem.InventoryService.Tests/
+    infra/terraform/             # Inventory Container App, Inventory SQL DB, its topics + subscriptions
     Dockerfile
-  OrderSystem.FulfillmentService/
+  payment-service/
+    OrderSystem.PaymentService.sln
+    src/OrderSystem.PaymentService/
+    tests/OrderSystem.PaymentService.Tests/
+    infra/terraform/             # Payment Container App, Payment SQL DB, its topics + subscriptions
     Dockerfile
-tests/
-  OrderSystem.OrderService.Tests/
-  OrderSystem.InventoryService.Tests/
-  OrderSystem.PaymentService.Tests/
-  OrderSystem.FulfillmentService.Tests/
+  fulfillment-service/
+    OrderSystem.FulfillmentService.sln
+    src/OrderSystem.FulfillmentService/
+    tests/OrderSystem.FulfillmentService.Tests/
+    infra/terraform/             # Fulfillment Container App (no DB), its topics + subscriptions
+    Dockerfile
+integration-tests/
   OrderSystem.IntegrationTests/  # cross-service, in-memory bus, full flow scenarios
+                                 #   (doesn't belong to any one service folder)
 infra/
   terraform-bootstrap/    # one-time, local state: remote-state storage account
   terraform/
     shared/               # resource group, Container Apps environment,
                            #   Service Bus namespace, Key Vault, managed identities,
                            #   Azure Container Registry (one, shared by all 4 services)
-    order-service/        # Order Container App, Order SQL DB, Order-owned topics
-    inventory-service/    # Inventory Container App, Inventory SQL DB, its topics + subscriptions
-    payment-service/      # Payment Container App, Payment SQL DB, its topics + subscriptions
-    fulfillment-service/  # Fulfillment Container App (no DB), its topics + subscriptions
 .github/
   workflows/
 ```
 
+Each service's `.sln` references `shared/OrderSystem.Contracts` and
+`shared/OrderSystem.Messaging` via relative-path project references (e.g.
+`../../shared/OrderSystem.Contracts/OrderSystem.Contracts.csproj`) — still
+one repo, still trivially in sync (no package feed/versioning to
+coordinate), but each service's own `dotnet build`/`dotnet test` only
+touches that service's `.sln`, matching the path-filtered per-service CI
+workflows and the fact that each service's Terraform, Dockerfile, and code
+now live and change together in one folder. There is no root-level
+aggregate `.sln` — a developer working on Order Service opens
+`services/order-service/OrderSystem.OrderService.sln` and nothing else
+builds or tests as a side effect.
+
 Infra is split per-service (not one monolithic config) so each service's
 phase can add exactly the infra slice it needs — see "Delivery / branching
 strategy" and the incremental topic/subscription wiring under each phase
-below.
+below. Only the genuinely cross-cutting Terraform (resource group,
+Container Apps environment, Service Bus namespace, Key Vault, ACR) stays
+under the top-level `infra/terraform/shared/`, since no single service
+folder owns it.
 
-Rationale: 4 services + 1 shared contracts/messaging library is small enough
-that multi-repo overhead (cross-repo versioning, coordinated PRs for shared
-contract changes) isn't worth it for a demo project. A single solution lets
-`dotnet build`/`dotnet test` cover everything in one command and keeps
-shared event contracts trivially in sync across producers/consumers — this
-directly serves the spec's idempotency/audit NFRs, since a mismatched event
-schema between services is exactly the kind of bug those NFRs exist to
-prevent.
+Rationale: this trades the convenience of a single root `.sln` for folder
+boundaries that mirror how the services actually deploy — independently,
+each with its own image and its own Terraform state. Shared event contracts
+still live in one place (`shared/`) and are referenced directly rather than
+published as a package, so producers/consumers can't drift out of sync —
+that directly serves the spec's idempotency/audit NFRs, since a mismatched
+event schema between services is exactly the kind of bug those NFRs exist
+to prevent.
 
 The in-memory `IEventPublisher`/`IEventSubscriber` implementation is not
 named in the spec's Tech Stack (which pins Azure Service Bus for
@@ -130,10 +157,17 @@ state before the next phase starts.
 ## Phases & Tasks
 
 ### Phase 0 — Shared foundation
-1. **Solution scaffolding** — `OrderSystem.sln`, project skeletons per the
-   layout above, `Directory.Build.props`/`.editorconfig` for shared
-   settings, solution-level `dotnet test` wired up.
-   - *Verify:* `dotnet build` succeeds with all empty projects.
+1. **Solution scaffolding** — `shared/OrderSystem.Contracts/` and
+   `shared/OrderSystem.Messaging/` project skeletons; each of the 4
+   `services/<name>/` folders with its own `.sln`, empty `src/`/`tests/`
+   project skeletons, and a relative-path project reference to both shared
+   projects; `integration-tests/OrderSystem.IntegrationTests/` skeleton;
+   root-level `Directory.Build.props`/`.editorconfig` so shared settings
+   (nullable, warnings-as-errors, etc.) apply across every service folder
+   without a root `.sln`.
+   - *Verify:* `dotnet build`/`dotnet test` succeeds when run from inside
+     each of the 4 service folders independently, and from
+     `integration-tests/`.
 2. **Event contracts** — DTOs for all 11 events in the spec's Events table,
    `OrderStatus`/`PaymentStatus` enums matching Data Model exactly (incl.
    unused `RefundPending`/`Refunded` members, per spec note that these
@@ -166,8 +200,11 @@ state before the next phase starts.
 6. **CI/CD skeleton** — reusable GitHub Actions workflow (build + test on
    PR, `docker build`/`docker push` to the shared ACR, `terraform
    plan`/`apply` job), plus the `terraform plan`/`apply` job for `shared/`
-   itself — this reusable workflow (parameterized by service name/path) is
-   the pattern each subsequent service phase's own workflow job calls into.
+   itself. Each subsequent service phase adds its own thin workflow file
+   (e.g. `order-service-ci.yml`) that's `paths`-filtered to only
+   `services/order-service/**` and calls this reusable workflow with that
+   service's folder as a parameter — so a change confined to one service
+   folder never triggers another service's build/test/deploy.
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
 7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
@@ -191,17 +228,19 @@ state before the next phase starts.
    own phases create the topics.)
    - *Verify:* unit tests confirm re-delivering any event is a no-op on
      second delivery (idempotency NFR).
-10. **Order Service Dockerfile, Terraform + deploy** — multi-stage
-    `Dockerfile` under `OrderSystem.OrderService/` (repo root as build
-    context, so it can restore the `Contracts`/`Messaging` project
-    references); `infra/terraform/order-service/`: Container App (image
-    pulled from the shared ACR's `order-service` repository), Azure SQL
-    Serverless DB, and the topics Order *owns* (`OrderCreated`,
-    `OrderCancelled`, `OrderConfirmed`); CI/CD job builds the image, pushes
-    to ACR tagged with the commit SHA, then deploys the Container App
-    pinned to that tag.
-    - *Verify:* `docker build` succeeds locally; `terraform plan` clean; CI
-      workflow builds, pushes, and deploys successfully.
+10. **Order Service Dockerfile, Terraform + deploy** —
+    `services/order-service/Dockerfile` (multi-stage; build context is the
+    *repo root*, not the service folder, so it can `COPY` the `shared/`
+    projects it references); `services/order-service/infra/terraform/`:
+    Container App (image pulled from the shared ACR's `order-service`
+    repository), Azure SQL Serverless DB, and the topics Order *owns*
+    (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job builds
+    the image, pushes to ACR tagged with the commit SHA, then deploys the
+    Container App pinned to that tag.
+    - *Verify:* `docker build -f services/order-service/Dockerfile .` (run
+      from repo root) succeeds locally; `terraform plan` clean inside
+      `services/order-service/infra/terraform/`; CI workflow builds,
+      pushes, and deploys successfully.
 
 **Checkpoint:** Order Service is deployed and fully testable (API +
 consumers) standalone, with hand-published inventory/payment events (via
@@ -220,19 +259,21 @@ before starting Phase 2.
     publish `InventoryReleased`; no-ops if no reservation exists for that
     order (idempotent, and safe against `OrderCancelled` arriving for an
     order that was never reserved, i.e. the `InventoryFailed` path).
-14. **Inventory Service Dockerfile, Terraform + deploy** — multi-stage
-    `Dockerfile` under `OrderSystem.InventoryService/` (same pattern as
-    Order Service's); `infra/terraform/inventory-service/`: Container App
-    (image from the shared ACR's `inventory-service` repository), Azure SQL
-    Serverless DB, Inventory's subscriptions to Order's `OrderCreated` and
-    `OrderCancelled` topics (which now exist as of Phase 1), and the
-    topics Inventory *owns* (`InventoryReserved`, `InventoryFailed`,
-    `InventoryReleased`); also adds Order Service's subscriptions to these
-    three new topics (Order's consumer code from Phase 1 task 9 has been
-    waiting for them) as a small addition to `order-service/`'s Terraform.
-    CI/CD job builds/pushes the image and deploys Inventory Service.
-    - *Verify:* `docker build` succeeds locally; `terraform plan` clean for
-      both modules; CI builds, pushes, and deploys; a manually-published
+14. **Inventory Service Dockerfile, Terraform + deploy** —
+    `services/inventory-service/Dockerfile` (same repo-root-build-context
+    pattern as Order Service's); `services/inventory-service/infra/terraform/`:
+    Container App (image from the shared ACR's `inventory-service`
+    repository), Azure SQL Serverless DB, Inventory's subscriptions to
+    Order's `OrderCreated` and `OrderCancelled` topics (which now exist as
+    of Phase 1), and the topics Inventory *owns* (`InventoryReserved`,
+    `InventoryFailed`, `InventoryReleased`); also adds Order Service's
+    subscriptions to these three new topics (Order's consumer code from
+    Phase 1 task 9 has been waiting for them) as a small addition to
+    `services/order-service/infra/terraform/`. CI/CD job builds/pushes the
+    image and deploys Inventory Service.
+    - *Verify:* `docker build -f services/inventory-service/Dockerfile .`
+      succeeds locally; `terraform plan` clean for both service folders'
+      Terraform; CI builds, pushes, and deploys; a manually-published
       `OrderCreated` reaches deployed Inventory and a resulting
       `InventoryReserved`/`InventoryFailed` reaches deployed Order Service.
 
@@ -244,34 +285,37 @@ before starting Phase 2.
     - *Verify:* unit test — re-delivering `InventoryReserved` for an
       already-charged order does not double-charge (idempotency NFR +
       "no uncharged confirmation" NFR).
-17. **Payment Service Dockerfile, Terraform + deploy** — multi-stage
-    `Dockerfile` under `OrderSystem.PaymentService/` (same pattern);
-    `infra/terraform/payment-service/`: Container App (image from the
-    shared ACR's `payment-service` repository), Azure SQL Serverless DB,
-    Payment's subscription to Inventory's `InventoryReserved` topic, and
-    the topics Payment *owns* (`PaymentCompleted`, `PaymentFailed`); also
-    adds Order Service's subscriptions to these two new topics. CI/CD job
-    builds/pushes the image and deploys Payment Service.
-    - *Verify:* `docker build` succeeds locally; `terraform plan` clean; CI
-      builds, pushes, and deploys; end-to-end through Payment reaches
-      `CONFIRMED` or `CANCELLED` correctly on deployed infra.
+17. **Payment Service Dockerfile, Terraform + deploy** —
+    `services/payment-service/Dockerfile` (same pattern);
+    `services/payment-service/infra/terraform/`: Container App (image from
+    the shared ACR's `payment-service` repository), Azure SQL Serverless
+    DB, Payment's subscription to Inventory's `InventoryReserved` topic,
+    and the topics Payment *owns* (`PaymentCompleted`, `PaymentFailed`);
+    also adds Order Service's subscriptions to these two new topics (in
+    `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
+    image and deploys Payment Service.
+    - *Verify:* `docker build -f services/payment-service/Dockerfile .`
+      succeeds locally; `terraform plan` clean; CI builds, pushes, and
+      deploys; end-to-end through Payment reaches `CONFIRMED` or
+      `CANCELLED` correctly on deployed infra.
 
 ### Phase 4 — Fulfillment Service
 18. **Simulated shipping on `OrderConfirmed`** — publish `OrderShipped`
     then `OrderDelivered` (simulated delay, no carrier integration).
-19. **Fulfillment Service Dockerfile, Terraform + deploy** — multi-stage
-    `Dockerfile` under `OrderSystem.FulfillmentService/` (same pattern);
-    `infra/terraform/fulfillment-service/`: Container App (image from the
-    shared ACR's `fulfillment-service` repository; no DB — Fulfillment owns
-    no tables per the spec's Data Model), Fulfillment's subscription to
-    Order's `OrderConfirmed` topic (created in Phase 1, finally subscribed
-    to here), and the topics Fulfillment *owns* (`OrderShipped`,
-    `OrderDelivered`); also adds Order Service's subscriptions to these two
-    new topics. CI/CD job builds/pushes the image and deploys Fulfillment
-    Service.
-    - *Verify:* `docker build` succeeds locally; `terraform plan` clean; CI
-      builds, pushes, and deploys; full flow reaches `SHIPPED` →
-      `DELIVERED` on deployed infra.
+19. **Fulfillment Service Dockerfile, Terraform + deploy** —
+    `services/fulfillment-service/Dockerfile` (same pattern);
+    `services/fulfillment-service/infra/terraform/`: Container App (image
+    from the shared ACR's `fulfillment-service` repository; no DB —
+    Fulfillment owns no tables per the spec's Data Model), Fulfillment's
+    subscription to Order's `OrderConfirmed` topic (created in Phase 1,
+    finally subscribed to here), and the topics Fulfillment *owns*
+    (`OrderShipped`, `OrderDelivered`); also adds Order Service's
+    subscriptions to these two new topics (in
+    `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
+    image and deploys Fulfillment Service.
+    - *Verify:* `docker build -f services/fulfillment-service/Dockerfile .`
+      succeeds locally; `terraform plan` clean; CI builds, pushes, and
+      deploys; full flow reaches `SHIPPED` → `DELIVERED` on deployed infra.
 
 **Checkpoint:** all four services exist, deployed, and wired end-to-end on
 real Azure infra. Confirm before the final verification/docs phase.
