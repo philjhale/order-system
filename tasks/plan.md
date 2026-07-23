@@ -25,10 +25,22 @@ tests/
   OrderSystem.FulfillmentService.Tests/
   OrderSystem.IntegrationTests/  # cross-service, in-memory bus, full flow scenarios
 infra/
+  terraform-bootstrap/    # one-time, local state: remote-state storage account
   terraform/
+    shared/               # resource group, Container Apps environment,
+                           #   Service Bus namespace, Key Vault, managed identities
+    order-service/        # Order Container App, Order SQL DB, Order-owned topics
+    inventory-service/    # Inventory Container App, Inventory SQL DB, its topics + subscriptions
+    payment-service/      # Payment Container App, Payment SQL DB, its topics + subscriptions
+    fulfillment-service/  # Fulfillment Container App (no DB), its topics + subscriptions
 .github/
   workflows/
 ```
+
+Infra is split per-service (not one monolithic config) so each service's
+phase can add exactly the infra slice it needs — see "Delivery / branching
+strategy" and the incremental topic/subscription wiring under each phase
+below.
 
 Rationale: 4 services + 1 shared contracts/messaging library is small enough
 that multi-repo overhead (cross-repo versioning, coordinated PRs for shared
@@ -47,7 +59,7 @@ always uses the Service Bus implementation.
 
 ## Delivery / branching strategy
 
-**Each phase (0–8) ships as its own PR directly into `main`** — no single
+**Each phase (0–5) ships as its own PR directly into `main`** — no single
 big PR at the end, and no long-lived integration branch spanning the whole
 feature. Concretely:
 
@@ -72,33 +84,43 @@ feature. Concretely:
   phase.
 - `/agent-skills:review` runs against each phase's diff before its PR is
   opened. `/agent-skills:ship`'s full go/no-go checklist runs once, after
-  the last phase (8) has merged, as a final check on the assembled system
+  the last phase (5) has merged, as a final check on the assembled system
   on `main` — not repeated for every phase.
 - The stage tracker (`tasks/feature-stage.md`) checks off "build" only once
-  all 8 phase PRs have merged; the "ship" stage then covers the final
+  all 6 phase PRs (0–5) have merged; the "ship" stage then covers the final
   system-wide checklist described above.
+- Each service phase (1–4) leaves the system in a real, deployed state on
+  Azure by the time its PR merges — infra and CI/CD land incrementally
+  with the code, not as a separate phase at the end.
 
 ## Dependency graph
 
 ```
-Contracts ──┬─▶ Messaging ──┬─▶ OrderService ──┬─▶ IntegrationTests
-            │                │                  │
-            │                ├─▶ InventoryService┤
-            │                │                  │
-            │                ├─▶ PaymentService ─┤
-            │                │                  │
-            │                └─▶ FulfillmentService
-            │
-            └────────────────────────────────────▶ (all services + tests)
+Contracts ──┬─▶ Messaging ──▶ OrderService ──┬─▶ InventoryService ──┬─▶ PaymentService ──┬─▶ FulfillmentService ──▶ IntegrationTests ──▶ Docs
+            │                (owns topics:    │  (subscribes to:     │  (subscribes to:    │  (subscribes to:
+            │                 OrderCreated,    │   OrderCreated,      │   InventoryReserved; │   OrderConfirmed;
+            │                 OrderCancelled,  │   OrderCancelled;    │   owns topics:       │   owns topics:
+            │                 OrderConfirmed)  │   owns topics:       │   PaymentCompleted,  │   OrderShipped,
+            │                                  │   InventoryReserved, │   PaymentFailed)     │   OrderDelivered)
+            │                                  │   InventoryFailed,   │
+            │                                  │   InventoryReleased) │
+            └──────────────────────────────────┴──────────────────────┴─────────────────────┴────────────────────────▶ (all)
 
-Terraform / CI-CD: independent of app code, can proceed in parallel once
-service container images exist to reference (deploy steps only meaningful
-after Phase 3).
+Shared Terraform foundation (resource group, Container Apps environment,
+Service Bus namespace, Key Vault, managed identities) sits under Phase 0 —
+every service's own Terraform module depends on it. Each service phase then
+adds: its own Container App + SQL DB (if any) + the topics it *owns*, plus
+subscriptions *to* topics that already exist by that point. Because Order
+Service is both first-built and a consumer of every other service's events,
+its consumer code is written in Phase 1 but the actual Service Bus
+subscriptions wiring those events to Order Service are added incrementally
+in Phases 2–4, at the point each producing service's topic first exists.
 ```
 
-Each service task below is vertically sliced (domain + persistence + API/consumer
-+ its own publishes), so each is independently testable against an
-in-memory bus before the next service is built.
+Each service task below is vertically sliced (domain + persistence +
+API/consumer + its own publishes + its own infra + its own deploy step), so
+each phase leaves the system in a real, deployed, independently-verifiable
+state before the next phase starts.
 
 ## Phases & Tasks
 
@@ -109,111 +131,145 @@ in-memory bus before the next service is built.
    - *Verify:* `dotnet build` succeeds with all empty projects.
 2. **Event contracts** — DTOs for all 11 events in the spec's Events table,
    `OrderStatus`/`PaymentStatus` enums matching Data Model exactly (incl.
-   unused `RefundPending`/`Refunded`/`Refunded` members, per spec note that
-   these exist but are unused this MVP).
+   unused `RefundPending`/`Refunded` members, per spec note that these
+   exist but are unused this MVP).
    - *Verify:* unit tests roundtrip-(de)serialize every event DTO.
 3. **Messaging abstraction** — `IEventPublisher`, `IEventSubscriber`
    (routing/partitioning by `orderId`), Azure Service Bus implementation
    (session id = `orderId`), in-memory implementation for tests/local dev.
    - *Verify:* unit tests against the in-memory implementation confirm
      per-`orderId` ordering.
+4. **Terraform remote state bootstrap** — `infra/terraform-bootstrap/`
+   (local state, run once by hand, not in CI): Azure Storage Account +
+   blob container used as the `azurerm` backend for every config below.
+   Can't live in the main config because that config needs the backend to
+   already exist before it can use it. Document the one-time manual
+   `terraform apply` command in the README (Phase 5).
+   - *Verify:* `terraform validate` clean; storage account + container
+     exist after a manual apply.
+5. **Terraform shared foundation** — `infra/terraform/shared/` (azurerm
+   backend from #4): resource group, Container Apps environment, Service
+   Bus namespace (no topics yet — each service phase below adds its own),
+   Key Vault, managed identities. Every per-service Terraform module below
+   references this via remote state / data sources.
+   - *Verify:* `terraform validate` + `terraform plan` clean.
+6. **CI/CD skeleton** — reusable GitHub Actions workflow (build + test on
+   PR), plus a `terraform plan`/`apply` job for `shared/` — this is the
+   pattern each subsequent service phase's own workflow job follows.
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
-4. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
+7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
    tables (EF Core, Azure SQL), order state machine enforcing only the
    transitions in the spec's state table, append-only `OrderEvents` write
    on every transition.
    - *Verify:* unit tests cover every legal transition and reject illegal
      ones (e.g. `CREATED → CONFIRMED` directly).
-5. **Order Service HTTP API** — `POST /orders` (create, state `CREATED`,
+8. **Order Service HTTP API** — `POST /orders` (create, state `CREATED`,
    publish `OrderCreated`), `GET /orders/{id}` (status query).
    - *Verify:* integration test hitting the API against a test DB and
      in-memory bus confirms `OrderCreated` is published with correct
      payload.
-6. **Order Service event consumers** — `InventoryReserved` → `RESERVED`,
+9. **Order Service event consumers** — `InventoryReserved` → `RESERVED`,
    `InventoryFailed` → `CANCELLED`, `PaymentCompleted` → `CONFIRMED` (+
    publish `OrderConfirmed`), `PaymentFailed` → `CANCELLED` (+ publish
    `OrderCancelled`), `OrderShipped` → `SHIPPED`, `OrderDelivered` →
-   `DELIVERED`. Idempotent via event-id/current-state check.
+   `DELIVERED`. Idempotent via event-id/current-state check. (Consumer
+   code exists now even though the corresponding subscriptions for
+   Inventory/Payment/Fulfillment events aren't wired until those services'
+   own phases create the topics.)
    - *Verify:* unit tests confirm re-delivering any event is a no-op on
      second delivery (idempotency NFR).
+10. **Order Service Terraform + deploy** — `infra/terraform/order-service/`:
+    Container App, Azure SQL Serverless DB, and the topics Order *owns*
+    (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job to
+    build/test/deploy Order Service.
+    - *Verify:* `terraform plan` clean; CI workflow deploys successfully.
 
-**Checkpoint:** Order Service alone is fully testable (API + consumers) via
-the in-memory bus with hand-published inventory/payment events standing in
-for the other services. Confirm before starting Phase 2.
+**Checkpoint:** Order Service is deployed and fully testable (API +
+consumers) standalone, with hand-published inventory/payment events (via
+the in-memory bus in tests) standing in for the other services. Confirm
+before starting Phase 2.
 
 ### Phase 2 — Inventory Service
-7. **Inventory domain + persistence** — `InventoryItems` table.
-8. **Reserve on `OrderCreated`** — all-or-nothing reservation across every
-   order line; publish `InventoryReserved` or `InventoryFailed { reason:
-   OutOfStock }`; idempotent (re-delivery doesn't double-decrement).
-   - *Verify:* unit test — order with one out-of-stock item reserves
-     nothing and publishes `InventoryFailed`; concurrent orders for the
-     same last unit never both succeed (NFR: no overselling).
-9. **Release on `OrderCancelled`** — release previously-reserved stock,
-   publish `InventoryReleased`; no-ops if no reservation exists for that
-   order (idempotent, and safe against `OrderCancelled` arriving for an
-   order that was never reserved, i.e. the `InventoryFailed` path).
+11. **Inventory domain + persistence** — `InventoryItems` table.
+12. **Reserve on `OrderCreated`** — all-or-nothing reservation across every
+    order line; publish `InventoryReserved` or `InventoryFailed { reason:
+    OutOfStock }`; idempotent (re-delivery doesn't double-decrement).
+    - *Verify:* unit test — order with one out-of-stock item reserves
+      nothing and publishes `InventoryFailed`; concurrent orders for the
+      same last unit never both succeed (NFR: no overselling).
+13. **Release on `OrderCancelled`** — release previously-reserved stock,
+    publish `InventoryReleased`; no-ops if no reservation exists for that
+    order (idempotent, and safe against `OrderCancelled` arriving for an
+    order that was never reserved, i.e. the `InventoryFailed` path).
+14. **Inventory Service Terraform + deploy** —
+    `infra/terraform/inventory-service/`: Container App, Azure SQL
+    Serverless DB, Inventory's subscriptions to Order's `OrderCreated` and
+    `OrderCancelled` topics (which now exist as of Phase 1), and the
+    topics Inventory *owns* (`InventoryReserved`, `InventoryFailed`,
+    `InventoryReleased`); also adds Order Service's subscriptions to these
+    three new topics (Order's consumer code from Phase 1 task 9 has been
+    waiting for them) as a small addition to `order-service/`'s Terraform.
+    CI/CD job to build/test/deploy Inventory Service.
+    - *Verify:* `terraform plan` clean for both modules; CI deploys; a
+      manually-published `OrderCreated` reaches deployed Inventory and a
+      resulting `InventoryReserved`/`InventoryFailed` reaches deployed
+      Order Service.
 
 ### Phase 3 — Payment Service
-10. **Payment domain + persistence** — `Payments` table.
-11. **Charge on `InventoryReserved`** — simulated payment gateway call
+15. **Payment domain + persistence** — `Payments` table.
+16. **Charge on `InventoryReserved`** — simulated payment gateway call
     keyed by `orderId` as idempotency key; publish `PaymentCompleted` or
     `PaymentFailed`.
     - *Verify:* unit test — re-delivering `InventoryReserved` for an
       already-charged order does not double-charge (idempotency NFR +
       "no uncharged confirmation" NFR).
+17. **Payment Service Terraform + deploy** —
+    `infra/terraform/payment-service/`: Container App, Azure SQL
+    Serverless DB, Payment's subscription to Inventory's `InventoryReserved`
+    topic, and the topics Payment *owns* (`PaymentCompleted`,
+    `PaymentFailed`); also adds Order Service's subscriptions to these two
+    new topics. CI/CD job to build/test/deploy Payment Service.
+    - *Verify:* `terraform plan` clean; CI deploys; end-to-end through
+      Payment reaches `CONFIRMED` or `CANCELLED` correctly on deployed
+      infra.
 
 ### Phase 4 — Fulfillment Service
-12. **Simulated shipping on `OrderConfirmed`** — publish `OrderShipped`
+18. **Simulated shipping on `OrderConfirmed`** — publish `OrderShipped`
     then `OrderDelivered` (simulated delay, no carrier integration).
+19. **Fulfillment Service Terraform + deploy** —
+    `infra/terraform/fulfillment-service/`: Container App (no DB —
+    Fulfillment owns no tables per the spec's Data Model), Fulfillment's
+    subscription to Order's `OrderConfirmed` topic (created in Phase 1,
+    finally subscribed to here), and the topics Fulfillment *owns*
+    (`OrderShipped`, `OrderDelivered`); also adds Order Service's
+    subscriptions to these two new topics. CI/CD job to build/test/deploy
+    Fulfillment Service.
+    - *Verify:* `terraform plan` clean; CI deploys; full flow reaches
+      `SHIPPED` → `DELIVERED` on deployed infra.
 
-**Checkpoint:** all four services exist. Confirm before integration-testing
-the full flow.
+**Checkpoint:** all four services exist, deployed, and wired end-to-end on
+real Azure infra. Confirm before the final verification/docs phase.
 
-### Phase 5 — End-to-end verification
-13. **Integration test suite** (in-memory bus, real per-service DBs or
-    test containers) covering the three flows in the spec's Success
-    Criteria:
+### Phase 5 — End-to-end verification & docs
+20. **Integration test suite** (in-memory bus for CI speed, or against the
+    real deployed environment for a manual smoke pass) covering the three
+    flows in the spec's Success Criteria:
     - sufficient stock + successful charge → `CONFIRMED` → `SHIPPED` →
       `DELIVERED`.
     - insufficient stock → `CANCELLED`, no payment attempted.
     - sufficient stock + failed charge → `CANCELLED`, inventory released.
     - re-delivery of any event in any of the above flows does not change
       the end state.
-
-### Phase 6 — Infrastructure as code
-14a. **Terraform remote state bootstrap** — a small, separate
-    `infra/terraform-bootstrap/` config (local state, run once by hand, not
-    in CI) that provisions only the Azure Storage Account + blob container
-    used as the `azurerm` backend for the main config below. This can't
-    live in the main config because that config needs the backend to
-    already exist before it can use it. Document the one-time manual
-    `terraform apply` command in the README (Phase 8) since it's outside
-    the normal CI/CD path.
-    - *Verify:* `terraform validate` clean; storage account + container
-      exist after a manual apply.
-14b. **Terraform (main)** — `infra/terraform/` configured with an
-    `azurerm` backend (storage account + container from 14a, providing
-    state locking via blob lease), provisioning: resource group, Container
-    Apps environment + one app/deployment per service, Service Bus
-    namespace + topic/subscription per event type, Azure SQL Serverless
-    instance per Order/Inventory/Payment (Fulfillment owns no tables per
-    the spec's Data Model), managed identities, Key Vault for secrets.
-    - *Verify:* `terraform validate` + `terraform plan` clean against the
-      remote backend from 14a.
-
-### Phase 7 — CI/CD
-15. **GitHub Actions** — build + test on PR; container image build; deploy
-    workflow (manual-trigger acceptable for a demo, given no uptime/scale
-    NFRs) running `terraform plan`/`apply` against the Phase 14a remote
-    backend — CI never runs the bootstrap config, only the main one.
-
-### Phase 8 — Docs
-16. **README** — local dev instructions (run with in-memory bus, no Azure
+21. **README** — local dev instructions (run with in-memory bus, no Azure
     dependency needed), pointer to `docs/SPEC.md` for architecture, and the
-    one-time manual bootstrap command from 14a for anyone standing up a
-    fresh environment.
+    one-time manual bootstrap command from Phase 0 task 4 for anyone
+    standing up a fresh environment.
+
+## PaymentRefunded — explicitly not built
+No topic, subscription, or producer/consumer code for `PaymentRefunded` is
+created anywhere above — the spec defines it for completeness only; no MVP
+flow produces it (refunds/cancellation are out of scope).
 
 ## Out of scope (per spec)
 Cart, Notification, Analytics, Search services; saga orchestration; locking/

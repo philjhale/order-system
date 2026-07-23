@@ -1,40 +1,45 @@
 # Todo: Order System MVP
 
+Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
+"Delivery / branching strategy" for details.
+
 ## Phase 0 — Shared foundation
 - [ ] 1. Solution scaffolding (`OrderSystem.sln`, project skeletons, build props)
 - [ ] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber, Service Bus + in-memory impls)
+- [ ] 4. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
+- [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace, Key Vault, identities)
+- [ ] 6. CI/CD skeleton (reusable build/test workflow + terraform plan/apply job for shared/)
 
 ## Phase 1 — Order Service
-- [ ] 4. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
-- [ ] 5. Order Service HTTP API (POST /orders, GET /orders/{id})
-- [ ] 6. Order Service event consumers (Inventory*/Payment*/OrderShipped/OrderDelivered → state transitions)
+- [ ] 7. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
+- [ ] 8. Order Service HTTP API (POST /orders, GET /orders/{id})
+- [ ] 9. Order Service event consumers (Inventory*/Payment*/OrderShipped/OrderDelivered → state transitions)
+- [ ] 10. Order Service Terraform + deploy (Container App, SQL DB, owned topics: OrderCreated/OrderCancelled/OrderConfirmed; CI/CD deploy job)
 
-**Checkpoint: Order Service testable standalone via in-memory bus.**
+**Checkpoint: Order Service deployed and testable standalone.**
 
 ## Phase 2 — Inventory Service
-- [ ] 7. Inventory domain + persistence (InventoryItems)
-- [ ] 8. Reserve on OrderCreated (all-or-nothing, publishes InventoryReserved/InventoryFailed)
-- [ ] 9. Release on OrderCancelled (publishes InventoryReleased)
+- [ ] 11. Inventory domain + persistence (InventoryItems)
+- [ ] 12. Reserve on OrderCreated (all-or-nothing, publishes InventoryReserved/InventoryFailed)
+- [ ] 13. Release on OrderCancelled (publishes InventoryReleased)
+- [ ] 14. Inventory Service Terraform + deploy (Container App, SQL DB, subscriptions to OrderCreated/OrderCancelled, owned topics: InventoryReserved/InventoryFailed/InventoryReleased + Order's new subscriptions to them; CI/CD deploy job)
 
 ## Phase 3 — Payment Service
-- [ ] 10. Payment domain + persistence (Payments)
-- [ ] 11. Charge on InventoryReserved (idempotent, publishes PaymentCompleted/PaymentFailed)
+- [ ] 15. Payment domain + persistence (Payments)
+- [ ] 16. Charge on InventoryReserved (idempotent, publishes PaymentCompleted/PaymentFailed)
+- [ ] 17. Payment Service Terraform + deploy (Container App, SQL DB, subscription to InventoryReserved, owned topics: PaymentCompleted/PaymentFailed + Order's new subscriptions to them; CI/CD deploy job)
 
 ## Phase 4 — Fulfillment Service
-- [ ] 12. Simulated shipping on OrderConfirmed (publishes OrderShipped, OrderDelivered)
+- [ ] 18. Simulated shipping on OrderConfirmed (publishes OrderShipped, OrderDelivered)
+- [ ] 19. Fulfillment Service Terraform + deploy (Container App, no DB, subscription to OrderConfirmed, owned topics: OrderShipped/OrderDelivered + Order's new subscriptions to them; CI/CD deploy job)
 
-**Checkpoint: all four services exist.**
+**Checkpoint: all four services deployed and wired end-to-end on real Azure infra.**
 
-## Phase 5 — End-to-end verification
-- [ ] 13. Integration test suite (happy path, out-of-stock, payment-failed, idempotency re-delivery)
+## Phase 5 — End-to-end verification & docs
+- [ ] 20. Integration test suite (happy path, out-of-stock, payment-failed, idempotency re-delivery)
+- [ ] 21. README (local dev instructions, link to docs/SPEC.md, one-time bootstrap command from Phase 0 task 4)
 
-## Phase 6 — Infrastructure as code
-- [ ] 14a. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
-- [ ] 14b. Terraform main config (azurerm backend, resource group, Container Apps, Service Bus, Azure SQL x3, identities, Key Vault)
-
-## Phase 7 — CI/CD
-- [ ] 15. GitHub Actions (build/test on PR, image build, deploy workflow against 14a's remote backend)
-
-## Phase 8 — Docs
-- [ ] 16. README (local dev instructions, link to docs/SPEC.md, one-time bootstrap command from 14a)
+## Explicitly not built
+`PaymentRefunded` — no topic, subscription, producer, or consumer anywhere
+in this plan (refunds/cancellation out of scope per spec).
