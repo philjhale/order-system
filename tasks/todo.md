@@ -7,7 +7,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 - [ ] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props)
 - [ ] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls; MaxDeliveryCount=10 + scheduled-redelivery delay so a short cross-topic race isn't dead-lettered)
-- [ ] 4. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
+- [ ] 4. Azure account configuration (confirm/select subscription, register required resource providers: Microsoft.App/ServiceBus/Sql/ContainerRegistry/KeyVault/Storage) + Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
 - [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace, Key Vault, identities, shared Azure Container Registry)
 - [ ] 6. CI/CD skeleton (Azure AD app with two federated OIDC credentials — PR-triggered subject + main-branch subject, so every phase's PR CI authenticates, not just one branch — granted Contributor on the resource group, IDs stored as repo secrets; reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/; when a PR touches two service Terraform folders, subscribing service's apply job declares `needs:` on topic-owning service's apply job)
 

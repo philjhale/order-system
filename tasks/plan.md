@@ -190,14 +190,26 @@ state before the next phase starts.
    - *Verify:* unit tests against the in-memory implementation confirm
      per-`orderId` ordering, and confirm an abandoned message is redelivered
      (after its scheduled delay) rather than lost.
-4. **Terraform remote state bootstrap** — `infra/terraform-bootstrap/`
-   (local state, run once by hand, not in CI): Azure Storage Account +
-   blob container used as the `azurerm` backend for every config below.
-   Can't live in the main config because that config needs the backend to
-   already exist before it can use it. Document the one-time manual
-   `terraform apply` command in the README (Phase 5).
-   - *Verify:* `terraform validate` clean; storage account + container
-     exist after a manual apply.
+4. **Azure account configuration + Terraform remote state bootstrap** —
+   first, a one-time manual precondition that nothing else in this plan can
+   run without: confirm/select the target Azure subscription (`az login`,
+   `az account set --subscription <id>`), and register the resource
+   providers this MVP needs (`az provider register --namespace` for
+   `Microsoft.App`, `Microsoft.ServiceBus`, `Microsoft.Sql`,
+   `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`, `Microsoft.Storage`)
+   — on a subscription that's never used these services, `terraform apply`
+   fails with `MissingSubscriptionRegistration` until this is done, and
+   registration can take several minutes to complete. Then:
+   `infra/terraform-bootstrap/` (local state, run once by hand, not in CI):
+   Azure Storage Account + blob container used as the `azurerm` backend for
+   every config below. Can't live in the main config because that config
+   needs the backend to already exist before it can use it. Document both
+   the provider-registration commands and the one-time manual `terraform
+   apply` command in the README (Phase 5).
+   - *Verify:* `az provider show --namespace <ns> --query
+     registrationState` returns `Registered` for each namespace above;
+     `terraform validate` clean; storage account + container exist after a
+     manual apply.
 5. **Terraform shared foundation** — `infra/terraform/shared/` (azurerm
    backend from #4): resource group, Container Apps environment, Service
    Bus namespace (no topics yet — each service phase below adds its own),
