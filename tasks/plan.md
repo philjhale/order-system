@@ -176,8 +176,15 @@ state before the next phase starts.
 3. **Messaging abstraction** — `IEventPublisher`, `IEventSubscriber`
    (routing/partitioning by `orderId`), Azure Service Bus implementation
    (session id = `orderId`), in-memory implementation for tests/local dev.
+   `IEventSubscriber` exposes an explicit abandon/retry outcome (in addition
+   to complete/dead-letter) so a handler can signal "not yet processable,
+   redeliver later" distinct from "processed" or "poison message" — needed
+   because session ordering only holds *within* one subscription, not
+   across the separate subscriptions a consumer may have to different
+   topics (see task 9).
    - *Verify:* unit tests against the in-memory implementation confirm
-     per-`orderId` ordering.
+     per-`orderId` ordering, and confirm an abandoned message is redelivered
+     rather than lost.
 4. **Terraform remote state bootstrap** — `infra/terraform-bootstrap/`
    (local state, run once by hand, not in CI): Azure Storage Account +
    blob container used as the `azurerm` backend for every config below.
@@ -229,9 +236,28 @@ state before the next phase starts.
    though the corresponding subscriptions for Inventory/Payment/
    Fulfillment events aren't wired until those services' own phases create
    the topics.)
+
+   Each of these events also has a required *precondition* state (e.g.
+   `PaymentCompleted` requires the order to already be `RESERVED`;
+   `OrderShipped` requires `CONFIRMED`). Because Inventory/Payment/
+   Fulfillment each react to upstream events on their own independent
+   subscriptions, there's no cross-service ordering guarantee that Order
+   Service's own consumer has caught up before a downstream event arrives
+   (e.g. Payment Service can process `InventoryReserved` and publish
+   `PaymentCompleted` before Order Service's own `InventoryReserved`
+   consumer has moved the order to `RESERVED`). If an event arrives and its
+   precondition state doesn't hold yet, the consumer abandons the message
+   (via the outcome from task 3) rather than rejecting or dropping it, so
+   Service Bus redelivers it once the precondition has had time to land.
+   Rely on the subscription's built-in max-delivery-count to dead-letter a
+   message that never becomes processable (genuine poison message), rather
+   than building custom retry/backoff logic.
    - *Verify:* unit tests confirm re-delivering any event is a no-op on
      second delivery (idempotency NFR); `InventoryReleased` for an already-
-     `CANCELLED` order is recorded but doesn't change `Status`.
+     `CANCELLED` order is recorded but doesn't change `Status`; an event
+     delivered before its precondition state is reached is abandoned (not
+     completed, not dead-lettered) and is processed normally on a
+     subsequent (simulated) redelivery.
 10. **Order Service Dockerfile, Terraform + deploy** —
     `services/order-service/Dockerfile` (multi-stage; build context is the
     *repo root*, not the service folder, so it can `COPY` the `shared/`

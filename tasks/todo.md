@@ -6,7 +6,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 ## Phase 0 — Shared foundation
 - [ ] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props)
 - [ ] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)
-- [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber, Service Bus + in-memory impls)
+- [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls)
 - [ ] 4. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
 - [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace, Key Vault, identities, shared Azure Container Registry)
 - [ ] 6. CI/CD skeleton (reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/)
@@ -14,7 +14,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 ## Phase 1 — Order Service
 - [ ] 7. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
 - [ ] 8. Order Service HTTP API (POST /orders, GET /orders/{id})
-- [ ] 9. Order Service event consumers (InventoryReserved/InventoryFailed/PaymentCompleted/PaymentFailed/OrderShipped/OrderDelivered → state transitions; InventoryReleased consumed + audit-logged, no transition)
+- [ ] 9. Order Service event consumers (InventoryReserved/InventoryFailed/PaymentCompleted/PaymentFailed/OrderShipped/OrderDelivered → state transitions; InventoryReleased consumed + audit-logged, no transition; events arriving before their precondition state is reached are abandoned for redelivery, not rejected/dropped — relies on subscription max-delivery-count for poison messages)
 - [ ] 10. Order Service Dockerfile, Terraform + deploy (`services/order-service/Dockerfile` + `services/order-service/infra/terraform/`: Container App image from shared ACR, SQL DB, owned topics: OrderCreated/OrderCancelled/OrderConfirmed; path-filtered CI/CD build/push/deploy job)
 
 **Checkpoint: Order Service deployed and testable standalone.**
