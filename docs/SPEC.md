@@ -26,6 +26,9 @@ system.
 - **Order cancellation** (customer-initiated cancellation of an already
   `RESERVED`/`CONFIRMED` order) — deferred; see note under Functional
   Requirements
+- **Refunds** (the `PaymentRefunded` event/flow and the
+  `DELIVERED → REFUND_PENDING → REFUNDED` return path) — deferred; no
+  functional requirement or event flow triggers a refund in this MVP
 
 **Success looks like:** a customer can place an order, the system reserves
 inventory and processes payment via independent services reacting to events
@@ -290,7 +293,7 @@ order are processed in order by each consumer.
 - **Ask first:** introducing an orchestrator/saga coordinator, adding
   locking or TTL-based reservation semantics, adding services beyond the
   four listed, choosing a concrete tech stack/message bus, adding
-  customer-initiated order cancellation.
+  customer-initiated order cancellation, adding refund handling.
 - **Never do:** mark an order `CONFIRMED` without a corresponding
   successful payment event; decrement inventory outside of the
   `OrderCreated`-triggered reservation step.
