@@ -9,7 +9,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls)
 - [ ] 4. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
 - [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace, Key Vault, identities, shared Azure Container Registry)
-- [ ] 6. CI/CD skeleton (reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/)
+- [ ] 6. CI/CD skeleton (reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/; when a PR touches two service Terraform folders, subscribing service's apply job declares `needs:` on topic-owning service's apply job)
 
 ## Phase 1 — Order Service
 - [ ] 7. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
@@ -23,16 +23,16 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 - [ ] 11. Inventory domain + persistence (InventoryItems)
 - [ ] 12. Reserve on OrderCreated (all-or-nothing, publishes InventoryReserved/InventoryFailed)
 - [ ] 13. Release on OrderCancelled (publishes InventoryReleased)
-- [ ] 14. Inventory Service Dockerfile, Terraform + deploy (`services/inventory-service/Dockerfile` + `services/inventory-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscriptions to OrderCreated/OrderCancelled, owned topics: InventoryReserved/InventoryFailed/InventoryReleased + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job)
+- [ ] 14. Inventory Service Dockerfile, Terraform + deploy (`services/inventory-service/Dockerfile` + `services/inventory-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscriptions to OrderCreated/OrderCancelled, owned topics: InventoryReserved/InventoryFailed/InventoryReleased + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job; Order's apply job `needs:` Inventory's apply job)
 
 ## Phase 3 — Payment Service
 - [ ] 15. Payment domain + persistence (Payments)
 - [ ] 16. Charge on InventoryReserved (idempotent, publishes PaymentCompleted/PaymentFailed)
-- [ ] 17. Payment Service Dockerfile, Terraform + deploy (`services/payment-service/Dockerfile` + `services/payment-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscription to InventoryReserved, owned topics: PaymentCompleted/PaymentFailed + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job)
+- [ ] 17. Payment Service Dockerfile, Terraform + deploy (`services/payment-service/Dockerfile` + `services/payment-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscription to InventoryReserved, owned topics: PaymentCompleted/PaymentFailed + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job; Order's apply job `needs:` Payment's apply job)
 
 ## Phase 4 — Fulfillment Service
 - [ ] 18. Simulated shipping on OrderConfirmed (publishes OrderShipped, OrderDelivered)
-- [ ] 19. Fulfillment Service Dockerfile, Terraform + deploy (`services/fulfillment-service/Dockerfile` + `services/fulfillment-service/infra/terraform/`: Container App image from shared ACR, no DB, subscription to OrderConfirmed, owned topics: OrderShipped/OrderDelivered + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job)
+- [ ] 19. Fulfillment Service Dockerfile, Terraform + deploy (`services/fulfillment-service/Dockerfile` + `services/fulfillment-service/infra/terraform/`: Container App image from shared ACR, no DB, subscription to OrderConfirmed, owned topics: OrderShipped/OrderDelivered + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job; Order's apply job `needs:` Fulfillment's apply job)
 
 **Checkpoint: all four services deployed and wired end-to-end on real Azure infra.**
 

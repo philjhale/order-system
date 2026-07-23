@@ -211,7 +211,13 @@ state before the next phase starts.
    (e.g. `order-service-ci.yml`) that's `paths`-filtered to only
    `services/order-service/**` and calls this reusable workflow with that
    service's folder as a parameter — so a change confined to one service
-   folder never triggers another service's build/test/deploy.
+   folder never triggers another service's build/test/deploy. When a single
+   PR touches two service Terraform folders at once (a later phase's task
+   adding both a new topic-owning service and Order Service's subscription
+   to it — see tasks 14/17/19), the subscribing service's `terraform apply`
+   job declares `needs:` on the topic-owning service's `terraform apply`
+   job in that PR's workflow run, so the topic always exists before the
+   subscription referencing it is applied.
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
 7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
@@ -300,7 +306,10 @@ before starting Phase 2.
     subscriptions to these three new topics (Order's consumer code from
     Phase 1 task 9 has been waiting for them) as a small addition to
     `services/order-service/infra/terraform/`. CI/CD job builds/pushes the
-    image and deploys Inventory Service.
+    image and deploys Inventory Service; per task 6, Order Service's
+    `terraform apply` job in this PR's workflow run declares `needs:` on
+    Inventory Service's `terraform apply` job, so Order's subscriptions
+    aren't applied before Inventory's topics exist.
     - *Verify:* `docker build -f services/inventory-service/Dockerfile .`
       succeeds locally; `terraform plan` clean for both service folders'
       Terraform; CI builds, pushes, and deploys; a manually-published
@@ -323,7 +332,9 @@ before starting Phase 2.
     and the topics Payment *owns* (`PaymentCompleted`, `PaymentFailed`);
     also adds Order Service's subscriptions to these two new topics (in
     `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
-    image and deploys Payment Service.
+    image and deploys Payment Service; per task 6, Order Service's
+    `terraform apply` job in this PR's workflow run declares `needs:` on
+    Payment Service's `terraform apply` job.
     - *Verify:* `docker build -f services/payment-service/Dockerfile .`
       succeeds locally; `terraform plan` clean; CI builds, pushes, and
       deploys; end-to-end through Payment reaches `CONFIRMED` or
@@ -342,7 +353,9 @@ before starting Phase 2.
     (`OrderShipped`, `OrderDelivered`); also adds Order Service's
     subscriptions to these two new topics (in
     `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
-    image and deploys Fulfillment Service.
+    image and deploys Fulfillment Service; per task 6, Order Service's
+    `terraform apply` job in this PR's workflow run declares `needs:` on
+    Fulfillment Service's `terraform apply` job.
     - *Verify:* `docker build -f services/fulfillment-service/Dockerfile .`
       succeeds locally; `terraform plan` clean; CI builds, pushes, and
       deploys; full flow reaches `SHIPPED` → `DELIVERED` on deployed infra.
