@@ -89,127 +89,80 @@ with what actually happened to inventory and payment.
 
 ## Data Model
 
-Adapted from the source article's five tables, translated to C# entity
-classes (PascalCase members, .NET types, enums for status fields instead
-of free-text `VARCHAR`). Grouped by which service owns the table, per the
-"each service owns exactly one piece of state" rule in High-Level Design —
-each group lives in that service's own Azure SQL database, not a shared one.
+Adapted from the source article's five tables, with column names switched
+to C# naming convention (PascalCase, e.g. `OrderId` instead of
+`order_id`) and .NET types substituted for their SQL equivalents. Grouped
+by which service owns the table, per the "each service owns exactly one
+piece of state" rule in High-Level Design — each group lives in that
+service's own Azure SQL database, not a shared one.
 
-**Order Service** — owns `Order`, `OrderItem`, `OrderEvent`:
+**Order Service**
 
-```csharp
-public class Order
-{
-    public Guid OrderId { get; set; }
-    public Guid UserId { get; set; }
-    public OrderStatus Status { get; set; }
-    public decimal TotalAmount { get; set; }
-    public string Currency { get; set; } = default!;   // ISO 4217, e.g. "USD"
-    public ShippingAddress ShippingAddress { get; set; } = default!;
-    public string PaymentMethod { get; set; } = default!;
-    public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset UpdatedAt { get; set; }
+`Orders`
 
-    public List<OrderItem> Items { get; set; } = [];
-}
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Primary key |
+| UserId | Guid | Customer reference |
+| Status | OrderStatus | `Created / Reserved / Confirmed / Shipped / Delivered / Cancelled` (`RefundPending` / `Refunded` also exist per the source article's state machine but are unused — refunds are out of scope for this MVP) |
+| TotalAmount | decimal | Order value |
+| Currency | string(3) | ISO 4217 currency code |
+| ShippingAddress | string (JSON) | Delivery location — shape not specified by the source article |
+| PaymentMethod | string | Payment identifier |
+| CreatedAt | DateTimeOffset | Creation timestamp |
+| UpdatedAt | DateTimeOffset | Last modification timestamp |
 
-public enum OrderStatus
-{
-    Created,
-    Reserved,
-    Confirmed,
-    Shipped,
-    Delivered,
-    Cancelled,
-    // RefundPending and Refunded are named in the source article's state
-    // machine but are out of scope for this MVP (see Objective / Order
-    // State Machine) — kept here only so the enum matches the full
-    // article state machine for traceability, not because anything sets them.
-    RefundPending,
-    Refunded
-}
+`OrderItems`
 
-public class OrderItem
-{
-    public Guid OrderId { get; set; }
-    public string ProductId { get; set; } = default!;  // SKU
-    public int Quantity { get; set; }
-    public decimal UnitPrice { get; set; }
-    public decimal Subtotal { get; set; }               // Quantity * UnitPrice at purchase time
-}
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Foreign key to `Orders` |
+| ProductId | string | SKU identifier |
+| Quantity | int | Unit count |
+| UnitPrice | decimal | Price per unit at purchase |
+| Subtotal | decimal | `Quantity * UnitPrice` |
 
-// Append-only audit log — one row per state transition (Non-Functional
-// Requirements: "Auditable state").
-public class OrderEvent
-{
-    public Guid EventId { get; set; }
-    public Guid OrderId { get; set; }
-    public string EventType { get; set; } = default!;   // e.g. "InventoryReserved"
-    public OrderStatus? FromState { get; set; }
-    public OrderStatus ToState { get; set; }
-    public JsonDocument EventData { get; set; } = default!; // event payload / context
-    public DateTimeOffset CreatedAt { get; set; }
-}
+`OrderEvents` (append-only audit log — Non-Functional Requirements:
+"Auditable state")
 
-// Shape not specified by the source article; a reasonable minimal
-// expansion of its "shipping_address JSONB" column.
-public class ShippingAddress
-{
-    public string Line1 { get; set; } = default!;
-    public string? Line2 { get; set; }
-    public string City { get; set; } = default!;
-    public string State { get; set; } = default!;
-    public string PostalCode { get; set; } = default!;
-    public string Country { get; set; } = default!;
-}
-```
+| Column | Type | Purpose |
+|---|---|---|
+| EventId | Guid | Primary key |
+| OrderId | Guid | Foreign key to `Orders` |
+| EventType | string | Event classification, e.g. `InventoryReserved` |
+| FromState | OrderStatus? | Previous order state |
+| ToState | OrderStatus | New order state |
+| EventData | string (JSON) | Metadata and context |
+| CreatedAt | DateTimeOffset | Event occurrence time |
 
-**Inventory Service** — owns `InventoryItem`:
+**Inventory Service**
 
-```csharp
-public class InventoryItem
-{
-    public string ProductId { get; set; } = default!;  // primary key (SKU)
-    public int Available { get; set; }
-    public int Reserved { get; set; }
-    public string WarehouseId { get; set; } = default!;
+`InventoryItems`
 
-    // The source article's "version" column is an optimistic-lock
-    // counter. Locking strategies are explicitly out of scope for this
-    // MVP (see Objective), so this field is kept for schema fidelity to
-    // the article but is not read or enforced by any service.
-    public int Version { get; set; }
+| Column | Type | Purpose |
+|---|---|---|
+| ProductId | string | Primary key (SKU) |
+| Available | int | Purchasable quantity |
+| Reserved | int | Quantity held by pending orders |
+| WarehouseId | string | Physical storage location |
+| Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
+| UpdatedAt | DateTimeOffset | Last modification time |
 
-    public DateTimeOffset UpdatedAt { get; set; }
-}
-```
+**Payment Service**
 
-**Payment Service** — owns `Payment`:
+`Payments`
 
-```csharp
-public class Payment
-{
-    public Guid PaymentId { get; set; }
-    public Guid OrderId { get; set; }
-    public string IdempotencyKey { get; set; } = default!;
-    public decimal Amount { get; set; }
-    public string Currency { get; set; } = default!;    // ISO 4217
-    public PaymentStatus Status { get; set; }
-    public string ProviderId { get; set; } = default!;   // external gateway reference
-    public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset? CompletedAt { get; set; }
-}
-
-public enum PaymentStatus
-{
-    Pending,
-    Completed,
-    Failed,
-    // Refunded is named in the source article but refunds are out of
-    // scope for this MVP (see Objective) — kept for traceability only.
-    Refunded
-}
-```
+| Column | Type | Purpose |
+|---|---|---|
+| PaymentId | Guid | Primary key |
+| OrderId | Guid | Foreign key to `Orders` |
+| IdempotencyKey | string | Duplicate-charge prevention identifier |
+| Amount | decimal | Charged value |
+| Currency | string(3) | ISO 4217 currency code |
+| Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |
+| ProviderId | string | External payment gateway reference |
+| CreatedAt | DateTimeOffset | Initiation time |
+| CompletedAt | DateTimeOffset? | Completion time |
 
 ## Non-Functional Requirements
 
