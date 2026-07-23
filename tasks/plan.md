@@ -158,7 +158,11 @@ state before the next phase starts.
 
 ### Phase 0 — Shared foundation
 1. **Solution scaffolding** — `shared/OrderSystem.Contracts/` and
-   `shared/OrderSystem.Messaging/` project skeletons; each of the 4
+   `shared/OrderSystem.Messaging/` project skeletons, each with its own
+   `tests/` sibling (`shared/OrderSystem.Contracts.Tests/`,
+   `shared/OrderSystem.Messaging.Tests/`) and a small `shared/OrderSystem.Shared.sln`
+   so they're buildable/testable on their own, not just transitively through
+   a service folder — tasks 2 and 3's unit tests live here; each of the 4
    `services/<name>/` folders with its own `.sln`, empty `src/`/`tests/`
    project skeletons, and a relative-path project reference to both shared
    projects; `integration-tests/OrderSystem.IntegrationTests/` skeleton;
@@ -166,8 +170,8 @@ state before the next phase starts.
    (nullable, warnings-as-errors, etc.) apply across every service folder
    without a root `.sln`.
    - *Verify:* `dotnet build`/`dotnet test` succeeds when run from inside
-     each of the 4 service folders independently, and from
-     `integration-tests/`.
+     each of the 4 service folders independently, from
+     `shared/OrderSystem.Shared.sln`, and from `integration-tests/`.
 2. **Event contracts** — DTOs for all 11 events in the spec's Events table,
    `OrderStatus`/`PaymentStatus` enums matching Data Model exactly (incl.
    unused `RefundPending`/`Refunded` members, per spec note that these
@@ -249,12 +253,20 @@ state before the next phase starts.
    *within the same workflow run*, never across separate workflow files —
    there is a single top-level orchestrating workflow
    (`.github/workflows/ci.yml`) triggered on every PR and every push to
-   `main`. It detects which `services/<name>/**` paths changed (e.g. via
-   `dorny/paths-filter`) and, for each affected service, calls that
-   service's reusable workflow as a job, `paths`-filtering only in the sense
-   of skipping jobs whose service folder didn't change — every service's
-   job still lives in the one workflow run for that commit/PR, so cross-
-   service `needs:` is always available. When a single PR touches two
+   `main`. It always runs a build/test job for `shared/` itself (both new
+   test projects from task 1), and detects which `services/<name>/**` paths
+   changed (e.g. via `dorny/paths-filter`) to decide which *service* jobs to
+   run — but a change under `shared/**` (or the root `Directory.Build.props`/
+   `.editorconfig`) is treated as affecting *every* service, not none: it
+   forces all 4 service build/test/deploy jobs to run regardless of their
+   own path filter, since every service embeds `shared/` by relative-path
+   reference and a shared-only PR must still rebuild, retest, and redeploy
+   everything that references it (otherwise a shared-only change could merge
+   with a green but entirely-skipped check and never reach any running
+   container). A PR touching only one service's folder still only runs that
+   service's job, keeping the fast path from before. Every service's
+   relevant job still lives in the one workflow run for that commit/PR, so
+   cross-service `needs:` is always available. When a single PR touches two
    service Terraform folders at once (a later phase's task adding both a
    new topic-owning service and Order Service's subscription to it — see
    tasks 14/17/19), the subscribing service's `terraform apply` job declares
