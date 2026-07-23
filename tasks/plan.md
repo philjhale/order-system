@@ -63,11 +63,13 @@ feature. Concretely:
   land as separate commits within that phase's single PR — one commit per
   task, one PR per phase — matching the "atomic commits, small PRs" guidance
   already in `git-workflow-and-versioning`.
-- This `feature/order-system-mvp` branch/worktree is *not* one of the
-  phase branches and is never merged into `main` itself — it exists only to
-  hold this orchestration bookkeeping (`tasks/plan.md`, `tasks/todo.md`,
-  `tasks/feature-stage.md`) across the whole multi-phase effort. It gets
-  discarded once all phases are merged.
+- This `feature/order-system-mvp` branch/worktree carries the planning
+  artifacts (`tasks/plan.md`, `tasks/todo.md`, `tasks/feature-stage.md`)
+  and is itself merged into `main` via its own PR *before* Phase 0 starts —
+  so `main` carries the plan as part of its history. Each subsequent phase
+  branch is then cut from `main` (which already includes this plan), gets
+  its own PR, and merges independently; the plan isn't re-merged with each
+  phase.
 - `/agent-skills:review` runs against each phase's diff before its PR is
   opened. `/agent-skills:ship`'s full go/no-go checklist runs once, after
   the last phase (8) has merged, as a final check on the assembled system
