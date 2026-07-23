@@ -221,13 +221,17 @@ state before the next phase starts.
 9. **Order Service event consumers** — `InventoryReserved` → `RESERVED`,
    `InventoryFailed` → `CANCELLED`, `PaymentCompleted` → `CONFIRMED` (+
    publish `OrderConfirmed`), `PaymentFailed` → `CANCELLED` (+ publish
-   `OrderCancelled`), `OrderShipped` → `SHIPPED`, `OrderDelivered` →
-   `DELIVERED`. Idempotent via event-id/current-state check. (Consumer
-   code exists now even though the corresponding subscriptions for
-   Inventory/Payment/Fulfillment events aren't wired until those services'
-   own phases create the topics.)
+   `OrderCancelled`), `InventoryReleased` → no state transition (order is
+   already `CANCELLED` by the time this arrives per the compensation
+   path) but still consumed and recorded in `OrderEvents` for audit,
+   `OrderShipped` → `SHIPPED`, `OrderDelivered` → `DELIVERED`. Idempotent
+   via event-id/current-state check. (Consumer code exists now even
+   though the corresponding subscriptions for Inventory/Payment/
+   Fulfillment events aren't wired until those services' own phases create
+   the topics.)
    - *Verify:* unit tests confirm re-delivering any event is a no-op on
-     second delivery (idempotency NFR).
+     second delivery (idempotency NFR); `InventoryReleased` for an already-
+     `CANCELLED` order is recorded but doesn't change `Status`.
 10. **Order Service Dockerfile, Terraform + deploy** —
     `services/order-service/Dockerfile` (multi-stage; build context is the
     *repo root*, not the service folder, so it can `COPY` the `shared/`

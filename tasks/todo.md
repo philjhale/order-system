@@ -14,7 +14,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 ## Phase 1 — Order Service
 - [ ] 7. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
 - [ ] 8. Order Service HTTP API (POST /orders, GET /orders/{id})
-- [ ] 9. Order Service event consumers (Inventory*/Payment*/OrderShipped/OrderDelivered → state transitions)
+- [ ] 9. Order Service event consumers (InventoryReserved/InventoryFailed/PaymentCompleted/PaymentFailed/OrderShipped/OrderDelivered → state transitions; InventoryReleased consumed + audit-logged, no transition)
 - [ ] 10. Order Service Dockerfile, Terraform + deploy (`services/order-service/Dockerfile` + `services/order-service/infra/terraform/`: Container App image from shared ACR, SQL DB, owned topics: OrderCreated/OrderCancelled/OrderConfirmed; path-filtered CI/CD build/push/deploy job)
 
 **Checkpoint: Order Service deployed and testable standalone.**
