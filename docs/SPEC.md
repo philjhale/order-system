@@ -437,6 +437,18 @@ service's own Azure SQL database, not a shared one.
 | Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
 | UpdatedAt | DateTimeOffset | Last modification time |
 
+`InventoryReservations` (per-order record of what was reserved — required
+so `OrderCancelled` can release the exact quantities it reserved, and so a
+redelivered `OrderCreated` can be recognized as already-reserved rather than
+double-decrementing `InventoryItems`)
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Part of primary key; which order this reservation is for |
+| ProductId | string | Part of primary key; which SKU was reserved |
+| Quantity | int | Quantity reserved for this order/product, to restore on release |
+| ReservedAt | DateTimeOffset | Reservation timestamp |
+
 **Payment Service**
 
 `Payments`

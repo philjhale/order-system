@@ -181,10 +181,15 @@ state before the next phase starts.
    redeliver later" distinct from "processed" or "poison message" — needed
    because session ordering only holds *within* one subscription, not
    across the separate subscriptions a consumer may have to different
-   topics (see task 9).
+   topics (see task 9). Subscriptions set a deliberately generous
+   `MaxDeliveryCount` (10) so a short (sub-second) cross-topic race doesn't
+   exhaust delivery attempts and get dead-lettered before the precondition
+   lands; abandoned messages are re-enqueued a few seconds in the future
+   (`ScheduledEnqueueTimeUtc`) rather than being instantly redelivered, so a
+   precondition-not-met loop doesn't spin tight.
    - *Verify:* unit tests against the in-memory implementation confirm
      per-`orderId` ordering, and confirm an abandoned message is redelivered
-     rather than lost.
+     (after its scheduled delay) rather than lost.
 4. **Terraform remote state bootstrap** — `infra/terraform-bootstrap/`
    (local state, run once by hand, not in CI): Azure Storage Account +
    blob container used as the `azurerm` backend for every config below.
@@ -204,8 +209,14 @@ state before the next phase starts.
    state / data sources.
    - *Verify:* `terraform validate` + `terraform plan` clean; ACR exists
      and Container Apps environment's managed identity has `AcrPull`.
-6. **CI/CD skeleton** — reusable GitHub Actions workflow (build + test on
-   PR, `docker build`/`docker push` to the shared ACR, `terraform
+6. **CI/CD skeleton** — first, create the Azure AD app registration with a
+   federated OIDC credential scoped to this GitHub repo/branch (no
+   long-lived secret), grant it `Contributor` on the resource group, and
+   store its client/tenant/subscription IDs as GitHub repo secrets/vars —
+   every job below depends on this identity existing, so it's a
+   prerequisite step of this task, not a separate one. Then: reusable
+   GitHub Actions workflow (`azure/login` using that OIDC credential, build
+   + test on PR, `docker build`/`docker push` to the shared ACR, `terraform
    plan`/`apply` job), plus the `terraform plan`/`apply` job for `shared/`
    itself. Each subsequent service phase adds its own thin workflow file
    (e.g. `order-service-ci.yml`) that's `paths`-filtered to only
@@ -218,6 +229,9 @@ state before the next phase starts.
    job declares `needs:` on the topic-owning service's `terraform apply`
    job in that PR's workflow run, so the topic always exists before the
    subscription referencing it is applied.
+   - *Verify:* `terraform plan`/`apply` and the docker build/push steps
+     authenticate successfully in CI using the OIDC credential (no stored
+     long-lived Azure credentials anywhere in the repo/secrets).
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
 7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
@@ -254,10 +268,11 @@ state before the next phase starts.
    consumer has moved the order to `RESERVED`). If an event arrives and its
    precondition state doesn't hold yet, the consumer abandons the message
    (via the outcome from task 3) rather than rejecting or dropping it, so
-   Service Bus redelivers it once the precondition has had time to land.
-   Rely on the subscription's built-in max-delivery-count to dead-letter a
-   message that never becomes processable (genuine poison message), rather
-   than building custom retry/backoff logic.
+   Service Bus redelivers it (after task 3's scheduled delay) once the
+   precondition has had time to land. Rely on the subscription's
+   `MaxDeliveryCount = 10` (task 3) to dead-letter a message that never
+   becomes processable (genuine poison message), rather than building
+   custom retry/backoff logic.
    - *Verify:* unit tests confirm re-delivering any event is a no-op on
      second delivery (idempotency NFR); `InventoryReleased` for an already-
      `CANCELLED` order is recorded but doesn't change `Status`; an event
@@ -271,12 +286,15 @@ state before the next phase starts.
     Container App (image pulled from the shared ACR's `order-service`
     repository), Azure SQL Serverless DB, and the topics Order *owns*
     (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job builds
-    the image, pushes to ACR tagged with the commit SHA, then deploys the
-    Container App pinned to that tag.
+    the image, pushes to ACR tagged with the commit SHA, runs EF Core
+    migrations against the SQL DB (dedicated CI/CD job step, before the new
+    Container App revision goes live), then deploys the Container App
+    pinned to that tag.
     - *Verify:* `docker build -f services/order-service/Dockerfile .` (run
       from repo root) succeeds locally; `terraform plan` clean inside
       `services/order-service/infra/terraform/`; CI workflow builds,
-      pushes, and deploys successfully.
+      pushes, migrates the DB schema, and deploys successfully against a
+      freshly-provisioned (schema-less) DB.
 
 **Checkpoint:** Order Service is deployed and fully testable (API +
 consumers) standalone, with hand-published inventory/payment events (via
@@ -284,17 +302,32 @@ the in-memory bus in tests) standing in for the other services. Confirm
 before starting Phase 2.
 
 ### Phase 2 — Inventory Service
-11. **Inventory domain + persistence** — `InventoryItems` table.
-12. **Reserve on `OrderCreated`** — all-or-nothing reservation across every
-    order line; publish `InventoryReserved` or `InventoryFailed { reason:
-    OutOfStock }`; idempotent (re-delivery doesn't double-decrement).
+11. **Inventory domain + persistence** — `InventoryItems` table and the
+    `InventoryReservations` table (per-order/per-product record of what was
+    reserved — the source of truth for both idempotency-checking and for
+    exactly what to restore on release; see Data Model).
+12. **Reserve on `OrderCreated`** — for each item, an atomic conditional
+    update (`UPDATE InventoryItems SET Available = Available - @qty WHERE
+    ProductId = @p AND Available >= @qty`, single DB transaction) so two
+    concurrent orders can't both win the last unit; before reserving, check
+    for an existing `InventoryReservations` row for this `orderId` and
+    no-op/re-publish the prior outcome if found (idempotency — a
+    redelivered `OrderCreated` can't double-decrement). On success across
+    every line, write one `InventoryReservations` row per item and publish
+    `InventoryReserved`; on any line failing, roll back the transaction and
+    publish `InventoryFailed { reason: OutOfStock }` (no stock touched, no
+    reservation rows written).
     - *Verify:* unit test — order with one out-of-stock item reserves
       nothing and publishes `InventoryFailed`; concurrent orders for the
-      same last unit never both succeed (NFR: no overselling).
-13. **Release on `OrderCancelled`** — release previously-reserved stock,
-    publish `InventoryReleased`; no-ops if no reservation exists for that
-    order (idempotent, and safe against `OrderCancelled` arriving for an
-    order that was never reserved, i.e. the `InventoryFailed` path).
+      same last unit never both succeed (NFR: no overselling); re-delivering
+      the same `OrderCreated` after a successful reservation does not
+      decrement `Available` a second time.
+13. **Release on `OrderCancelled`** — read the order's `InventoryReservations`
+    rows to get the exact product/quantity pairs to restore, add them back
+    to `InventoryItems.Available`, delete the reservation rows, publish
+    `InventoryReleased`; no-ops if no reservation rows exist for that order
+    (idempotent, and safe against `OrderCancelled` arriving for an order
+    that was never reserved, i.e. the `InventoryFailed` path).
 14. **Inventory Service Dockerfile, Terraform + deploy** —
     `services/inventory-service/Dockerfile` (same repo-root-build-context
     pattern as Order Service's); `services/inventory-service/infra/terraform/`:
@@ -309,12 +342,15 @@ before starting Phase 2.
     image and deploys Inventory Service; per task 6, Order Service's
     `terraform apply` job in this PR's workflow run declares `needs:` on
     Inventory Service's `terraform apply` job, so Order's subscriptions
-    aren't applied before Inventory's topics exist.
+    aren't applied before Inventory's topics exist. CI/CD job also runs EF
+    Core migrations against Inventory's DB before its Container App
+    revision goes live (same pattern as task 10).
     - *Verify:* `docker build -f services/inventory-service/Dockerfile .`
       succeeds locally; `terraform plan` clean for both service folders'
-      Terraform; CI builds, pushes, and deploys; a manually-published
-      `OrderCreated` reaches deployed Inventory and a resulting
-      `InventoryReserved`/`InventoryFailed` reaches deployed Order Service.
+      Terraform; CI builds, pushes, migrates the DB schema, and deploys; a
+      manually-published `OrderCreated` reaches deployed Inventory and a
+      resulting `InventoryReserved`/`InventoryFailed` reaches deployed Order
+      Service.
 
 ### Phase 3 — Payment Service
 15. **Payment domain + persistence** — `Payments` table.
@@ -334,11 +370,13 @@ before starting Phase 2.
     `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
     image and deploys Payment Service; per task 6, Order Service's
     `terraform apply` job in this PR's workflow run declares `needs:` on
-    Payment Service's `terraform apply` job.
+    Payment Service's `terraform apply` job. CI/CD job also runs EF Core
+    migrations against Payment's DB before its Container App revision goes
+    live (same pattern as task 10).
     - *Verify:* `docker build -f services/payment-service/Dockerfile .`
-      succeeds locally; `terraform plan` clean; CI builds, pushes, and
-      deploys; end-to-end through Payment reaches `CONFIRMED` or
-      `CANCELLED` correctly on deployed infra.
+      succeeds locally; `terraform plan` clean; CI builds, pushes, migrates
+      the DB schema, and deploys; end-to-end through Payment reaches
+      `CONFIRMED` or `CANCELLED` correctly on deployed infra.
 
 ### Phase 4 — Fulfillment Service
 18. **Simulated shipping on `OrderConfirmed`** — publish `OrderShipped`
