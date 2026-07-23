@@ -215,16 +215,25 @@ state before the next phase starts.
      `terraform validate` clean; storage account + container exist after a
      manual apply.
 5. **Terraform shared foundation** — `infra/terraform/shared/` (azurerm
-   backend from #4): resource group, Container Apps environment, Service
-   Bus namespace (no topics yet — each service phase below adds its own),
-   Key Vault, managed identities, and one Azure Container Registry (ACR)
-   shared by all 4 services (one registry, one set of push/pull
-   credentials via managed identity — each service gets its own repository
-   *within* that registry, e.g. `order-service`, `inventory-service`).
-   Every per-service Terraform module below references this via remote
-   state / data sources.
-   - *Verify:* `terraform validate` + `terraform plan` clean; ACR exists
-     and Container Apps environment's managed identity has `AcrPull`.
+   backend from #4): resource group, Container Apps environment,
+   `azurerm_servicebus_namespace` with `sku = "Standard"` (no topics yet —
+   each service phase below adds its own) — Standard is mandatory per Tech
+   Stack: Basic supports neither topics/subscriptions nor the sessions this
+   design's ordering guarantee depends on — Key Vault, one shared
+   user-assigned managed identity for ACR pulls, and one Azure Container
+   Registry (ACR) shared by all 4 services (one registry, one set of
+   push/pull credentials — each service gets its own repository *within*
+   that registry, e.g. `order-service`, `inventory-service`; grant this
+   shared identity `AcrPull` on the registry). Each service's own Terraform
+   (tasks 10/14/17/19) then attaches this same identity to its Container App
+   and references it in that Container App's `registry` block as the pull
+   credential — ACR authentication is configured per-Container-App, not at
+   the Container Apps environment level, so the environment resource itself
+   grants nothing on its own. Every per-service Terraform module below
+   references this shared foundation via remote state / data sources.
+   - *Verify:* `terraform validate` + `terraform plan` clean; Service Bus
+     namespace exists at `Standard` SKU; ACR exists and the shared
+     user-assigned identity has `AcrPull` on it.
 6. **CI/CD skeleton** — first, create the Azure AD app registration with
    *two* federated OIDC credentials (no long-lived secret): one with
    subject `repo:{org}/{repo}:pull_request` (covers every phase's

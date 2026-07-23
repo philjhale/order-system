@@ -359,12 +359,16 @@ other, since each is a separate stream. See NFR 3.
   4 services) and over Azure Functions (Order Service is both an HTTP API
   and a Service Bus consumer in one logical service — Functions would
   force splitting that across trigger types/apps for no benefit).
-- Event bus: Azure Service Bus topics/subscriptions — one topic per event
-  type in the Events table below, with `orderId` used as the Service Bus
-  session id so per-order events stay ordered per consumer, matching the
-  "partitioned by orderId" requirement above. Chosen over Event Grid (no
-  strong ordering guarantees) and Event Hubs (built for high-throughput
-  streaming, not this event flow's transactional needs).
+- Event bus: Azure Service Bus topics/subscriptions, **Standard tier** —
+  one topic per event type in the Events table below, with `orderId` used
+  as the Service Bus session id so per-order events stay ordered per
+  consumer, matching the "partitioned by orderId" requirement above.
+  Standard tier is a hard requirement, not a cost optimization: **Basic
+  tier supports only queues, no topics/subscriptions at all, and sessions
+  require Standard or Premium** — this design cannot run on Basic. Premium
+  isn't needed for MVP demo throughput. Chosen over Event Grid (no strong
+  ordering guarantees) and Event Hubs (built for high-throughput streaming,
+  not this event flow's transactional needs).
 - Per-service state: Azure SQL Database, **Serverless tier**, one
   database per service, not shared — matching "each service owns exactly
   one piece of state." Serverless tier auto-pauses when idle, keeping
