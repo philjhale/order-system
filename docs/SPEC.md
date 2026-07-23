@@ -49,36 +49,40 @@ Each of the four services (Order, Inventory, Payment, Fulfillment) is a
 separate .NET service/process.
 
 **Cloud platform:** Azure.
-- Compute: Azure Container Apps (or AKS if the demo later needs more
-  orchestration control) running each service as an independent
-  container/app.
+- Compute: Azure Container Apps running each service as an independent
+  container/app. Chosen over AKS (unnecessary orchestration overhead for
+  4 services) and over Azure Functions (Order Service is both an HTTP API
+  and a Service Bus consumer in one logical service — Functions would
+  force splitting that across trigger types/apps for no benefit).
 - Event bus (choreography): Azure Service Bus topics/subscriptions — one
   topic per event type in the Events table below, with `orderId` used as
   the Service Bus session id so per-order events stay ordered per
   consumer, matching the "partitioned by orderId" requirement above.
-- Per-service state: Azure SQL Database (or Cosmos DB if a service's
-  access pattern turns out to be better served key/value) — one database
-  per service, not shared, matching "each service owns exactly one piece
-  of state."
+  Chosen over Event Grid (no strong ordering guarantees) and Event Hubs
+  (built for high-throughput streaming, not transactional choreography).
+- Per-service state: Azure SQL Database, **Serverless tier**, one
+  database per service, not shared — matching "each service owns exactly
+  one piece of state." Serverless tier auto-pauses when idle, keeping
+  demo cost near zero while still giving Inventory/Payment the
+  relational/transactional guarantees the consistency NFRs require.
+  Cosmos DB was considered and ruled out on cost (RU-based pricing) with
+  no offsetting benefit for this access pattern.
 - Idempotency/audit: order-events append log stored alongside the Order
   Service's own database.
 
+**CI/CD:** GitHub Actions.
+
 **Infrastructure as code:** Terraform, provisioning:
 - Resource group(s) for the demo
-- Azure Container Apps environment (or AKS cluster) + one app/deployment
-  per service
+- Azure Container Apps environment + one app/deployment per service
 - Azure Service Bus namespace + topics/subscriptions per event type
-- Azure SQL / Cosmos DB instances per service
+- Azure SQL Database (Serverless tier) instance per service
 - Any required networking, identity (managed identities for service-to-
   service and service-to-bus auth), and secrets (Azure Key Vault)
 
 **Explicitly not decided here (deferred to Plan phase):**
-- Exact .NET version, project layout (solution structure, one repo vs.
-  multiple)
-- Container Apps vs. AKS (default to Container Apps for demo simplicity
-  unless a reason to use AKS shows up)
-- Azure SQL vs. Cosmos DB per service
-- CI/CD pipeline (GitHub Actions vs. Azure DevOps)
+- Exact .NET version
+- Project layout (solution structure, one repo vs. multiple)
 
 ## Non-Functional Requirements
 
