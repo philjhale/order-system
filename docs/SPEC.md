@@ -1,5 +1,9 @@
 # Spec: E-Commerce Order System (MVP)
 
+**Source:** design and terminology (states, events, choreography flow)
+are adapted from
+[Designing an E-Commerce Order System](https://sadamkhan.spiralsync.com/blog/system-design/design-ecommerce-order-system).
+
 ## Objective
 
 A demo distributed order system that shows a realistic choreography-based,
