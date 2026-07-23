@@ -43,3 +43,8 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 ## Explicitly not built
 `PaymentRefunded` — no topic, subscription, producer, or consumer anywhere
 in this plan (refunds/cancellation out of scope per spec).
+
+## Out of scope (per spec)
+Cart, Notification, Analytics, Search services; saga orchestration; locking/
+TTL reservation semantics; customer-initiated cancellation; refunds;
+auth/authz; transport-level retry/DLQ handling.
