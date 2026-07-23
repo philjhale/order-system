@@ -209,12 +209,20 @@ state before the next phase starts.
    state / data sources.
    - *Verify:* `terraform validate` + `terraform plan` clean; ACR exists
      and Container Apps environment's managed identity has `AcrPull`.
-6. **CI/CD skeleton** — first, create the Azure AD app registration with a
-   federated OIDC credential scoped to this GitHub repo/branch (no
-   long-lived secret), grant it `Contributor` on the resource group, and
-   store its client/tenant/subscription IDs as GitHub repo secrets/vars —
-   every job below depends on this identity existing, so it's a
-   prerequisite step of this task, not a separate one. Then: reusable
+6. **CI/CD skeleton** — first, create the Azure AD app registration with
+   *two* federated OIDC credentials (no long-lived secret): one with
+   subject `repo:{org}/{repo}:pull_request` (covers every phase's
+   PR-triggered build/test/`terraform plan` run, regardless of which
+   branch the PR is from) and one with subject
+   `repo:{org}/{repo}:ref:refs/heads/main` (covers post-merge `terraform
+   apply`/deploy runs on `main`). A single branch-scoped credential would
+   only authenticate one branch's runs and break CI on every other phase's
+   PR — this plan's delivery strategy runs six phase branches through PR
+   CI, so both subjects are required, not optional. Grant the app
+   `Contributor` on the resource group, and store its client/tenant/
+   subscription IDs as GitHub repo secrets/vars — every job below depends
+   on this identity existing, so it's a prerequisite step of this task, not
+   a separate one. Then: reusable
    GitHub Actions workflow (`azure/login` using that OIDC credential, build
    + test on PR, `docker build`/`docker push` to the shared ACR, `terraform
    plan`/`apply` job), plus the `terraform plan`/`apply` job for `shared/`
@@ -229,8 +237,9 @@ state before the next phase starts.
    job declares `needs:` on the topic-owning service's `terraform apply`
    job in that PR's workflow run, so the topic always exists before the
    subscription referencing it is applied.
-   - *Verify:* `terraform plan`/`apply` and the docker build/push steps
-     authenticate successfully in CI using the OIDC credential (no stored
+   - *Verify:* a PR-triggered run (build/test/`terraform plan`) and a
+     post-merge run on `main` (`terraform apply`/deploy) both authenticate
+     successfully via their respective OIDC credential (no stored
      long-lived Azure credentials anywhere in the repo/secrets).
 
 ### Phase 1 — Order Service (core; nothing else can be tested end-to-end without it)
@@ -314,7 +323,11 @@ before starting Phase 2.
     no-op/re-publish the prior outcome if found (idempotency — a
     redelivered `OrderCreated` can't double-decrement). On success across
     every line, write one `InventoryReservations` row per item and publish
-    `InventoryReserved`; on any line failing, roll back the transaction and
+    `InventoryReserved { orderId, totalAmount, paymentMethod }` — the latter
+    two fields are carried through unchanged from `OrderCreated`'s payload,
+    since Inventory Service has no use for them itself and Payment Service
+    (which consumes `InventoryReserved` next) has no other way to learn
+    what to charge; on any line failing, roll back the transaction and
     publish `InventoryFailed { reason: OutOfStock }` (no stock touched, no
     reservation rows written).
     - *Verify:* unit test — order with one out-of-stock item reserves
@@ -353,8 +366,12 @@ before starting Phase 2.
       Service.
 
 ### Phase 3 — Payment Service
-15. **Payment domain + persistence** — `Payments` table.
-16. **Charge on `InventoryReserved`** — simulated payment gateway call
+15. **Payment domain + persistence** — `Payments` table (`OrderId` stored as
+    a plain column, not a DB-level FK — `Orders` lives in a different
+    service's database; see Data Model).
+16. **Charge on `InventoryReserved`** — simulated payment gateway call for
+    `totalAmount` against `paymentMethod` (both read directly from the
+    consumed event's payload, not queried from any other service's DB),
     keyed by `orderId` as idempotency key; publish `PaymentCompleted` or
     `PaymentFailed`.
     - *Verify:* unit test — re-delivering `InventoryReserved` for an

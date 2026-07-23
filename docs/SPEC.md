@@ -161,10 +161,12 @@ coordinator or distributed transaction.
 
 1. Customer calls Order Service to place an order.
 2. Order Service creates the order in state `CREATED`, persists it, and
-   publishes `OrderCreated { orderId, items, ... }`.
+   publishes `OrderCreated { orderId, items, totalAmount, paymentMethod }`.
 3. Inventory Service consumes `OrderCreated`:
    - If all items have sufficient stock: reserve (decrement available
-     stock) for every item, publish `InventoryReserved { orderId }`.
+     stock) for every item, publish `InventoryReserved { orderId,
+     totalAmount, paymentMethod }` (pass-through — Inventory Service
+     doesn't use these fields itself).
    - Else: publish `InventoryFailed { orderId, reason }` (no stock is
      decremented).
 4. Order Service consumes the result:
@@ -172,8 +174,9 @@ coordinator or distributed transaction.
    - `InventoryFailed` → order moves to `CANCELLED` (reason: out of
      stock). Flow ends.
 5. Payment Service consumes `InventoryReserved`:
-   - Attempts to charge the customer's payment method, using the order id
-     as an idempotency key so retried events never double-charge.
+   - Attempts to charge `totalAmount` to `paymentMethod` (both carried on
+     the event — see Events), using the order id as an idempotency key so
+     retried events never double-charge.
    - Success → publish `PaymentCompleted { orderId }`.
    - Failure → publish `PaymentFailed { orderId, reason }`.
 6. Order Service consumes the result:
@@ -288,8 +291,8 @@ cancellation — that transition is out of scope for now.)
 
 | Event | Producer | Consumer(s) | Payload (minimum) |
 |---|---|---|---|
-| `OrderCreated` | Order Service | Inventory Service | `orderId, items[]` |
-| `InventoryReserved` | Inventory Service | Order Service, Payment Service | `orderId` |
+| `OrderCreated` | Order Service | Inventory Service | `orderId, items[], totalAmount, paymentMethod` |
+| `InventoryReserved` | Inventory Service | Order Service, Payment Service | `orderId, totalAmount, paymentMethod` |
 | `InventoryFailed` | Inventory Service | Order Service | `orderId, reason` |
 | `PaymentCompleted` | Payment Service | Order Service | `orderId, paymentId` |
 | `PaymentFailed` | Payment Service | Order Service | `orderId, reason` |
@@ -310,6 +313,13 @@ naming their events explicitly. `PaymentRefunded` is defined for
 completeness but is currently unused — no flow in this MVP produces it,
 since customer-initiated cancellation (the only source of refunds on a
 completed payment) is out of scope for now.
+
+`totalAmount` and `paymentMethod` originate on `OrderCreated` and are
+carried through unchanged on `InventoryReserved` — Payment Service owns no
+order data of its own (each service's database holds only the state it
+owns; see Data Model) and consumes only `InventoryReserved`, so this is the
+only way it can learn what to charge and how without a cross-service DB
+read.
 
 **`reason` values** (the three events above that carry a `reason` field use
 a fixed vocabulary, not free text):
@@ -456,7 +466,7 @@ double-decrementing `InventoryItems`)
 | Column | Type | Purpose |
 |---|---|---|
 | PaymentId | Guid | Primary key |
-| OrderId | Guid | Foreign key to `Orders` |
+| OrderId | Guid | Logical reference to `Orders` — not a DB-level foreign key, since `Orders` lives in Order Service's own database, a separate Azure SQL Database from Payment Service's (no cross-database FK constraints) |
 | IdempotencyKey | string | Duplicate-charge prevention identifier |
 | Amount | decimal | Charged value |
 | Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |

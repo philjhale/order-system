@@ -9,7 +9,7 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls; MaxDeliveryCount=10 + scheduled-redelivery delay so a short cross-topic race isn't dead-lettered)
 - [ ] 4. Terraform remote state bootstrap (storage account + container, local state, one-time manual apply)
 - [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace, Key Vault, identities, shared Azure Container Registry)
-- [ ] 6. CI/CD skeleton (Azure AD app + federated OIDC credential for GitHub Actions auth, granted Contributor on the resource group, IDs stored as repo secrets; reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/; when a PR touches two service Terraform folders, subscribing service's apply job declares `needs:` on topic-owning service's apply job)
+- [ ] 6. CI/CD skeleton (Azure AD app with two federated OIDC credentials — PR-triggered subject + main-branch subject, so every phase's PR CI authenticates, not just one branch — granted Contributor on the resource group, IDs stored as repo secrets; reusable build/test/docker-build-push workflow + terraform plan/apply job for shared/; when a PR touches two service Terraform folders, subscribing service's apply job declares `needs:` on topic-owning service's apply job)
 
 ## Phase 1 — Order Service
 - [ ] 7. Order domain + persistence (Orders/OrderItems/OrderEvents, state machine)
@@ -21,13 +21,13 @@ Each phase = its own branch off `main` + its own PR. See `tasks/plan.md`
 
 ## Phase 2 — Inventory Service
 - [ ] 11. Inventory domain + persistence (InventoryItems + InventoryReservations — per-order/product record backing idempotent reserve + exact-quantity release)
-- [ ] 12. Reserve on OrderCreated (atomic conditional decrement per item to prevent overselling; InventoryReservations row per item for idempotency + release source-of-truth; publishes InventoryReserved/InventoryFailed)
+- [ ] 12. Reserve on OrderCreated (atomic conditional decrement per item to prevent overselling; InventoryReservations row per item for idempotency + release source-of-truth; publishes InventoryReserved/InventoryFailed, passing totalAmount/paymentMethod through unchanged so Payment Service has something to charge)
 - [ ] 13. Release on OrderCancelled (reads InventoryReservations for exact quantities, restores stock, deletes rows, publishes InventoryReleased)
 - [ ] 14. Inventory Service Dockerfile, Terraform + deploy (`services/inventory-service/Dockerfile` + `services/inventory-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscriptions to OrderCreated/OrderCancelled, owned topics: InventoryReserved/InventoryFailed/InventoryReleased + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job runs EF Core migrations before Container App revision goes live; Order's apply job `needs:` Inventory's apply job)
 
 ## Phase 3 — Payment Service
-- [ ] 15. Payment domain + persistence (Payments)
-- [ ] 16. Charge on InventoryReserved (idempotent, publishes PaymentCompleted/PaymentFailed)
+- [ ] 15. Payment domain + persistence (Payments; OrderId is a plain column, not a DB-level FK — Orders lives in a different service's database)
+- [ ] 16. Charge on InventoryReserved (charges totalAmount/paymentMethod read from the event payload; idempotent; publishes PaymentCompleted/PaymentFailed)
 - [ ] 17. Payment Service Dockerfile, Terraform + deploy (`services/payment-service/Dockerfile` + `services/payment-service/infra/terraform/`: Container App image from shared ACR, SQL DB, subscription to InventoryReserved, owned topics: PaymentCompleted/PaymentFailed + Order's new subscriptions to them; path-filtered CI/CD build/push/deploy job runs EF Core migrations before Container App revision goes live; Order's apply job `needs:` Payment's apply job)
 
 ## Phase 4 — Fulfillment Service
