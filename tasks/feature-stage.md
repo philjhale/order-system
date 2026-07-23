@@ -1,6 +1,6 @@
 # Feature stage tracker: order-system-mvp
 
-- [ ] spec
+- [x] spec
 - [ ] plan
 - [ ] build
 - [ ] review
