@@ -53,9 +53,16 @@ Consistency is the only NFR this spec addresses:
 2. **No uncharged confirmation / no chargeless loss** — an order is never
    marked `CONFIRMED` unless payment actually succeeded; a customer is
    never charged for an order that doesn't end up `CONFIRMED`.
-3. **Idempotent event handling** — every service assumes at-least-once
-   event delivery and must produce the same end state no matter how many
-   times a given event is (re)delivered.
+3. **Idempotent and order-tolerant event handling** — every service assumes
+   at-least-once event delivery and must produce the same end state no
+   matter how many times a given event is (re)delivered. Separately, since
+   each event type is produced by an independent service reacting to its
+   own upstream event, a consumer may receive an event before the event(s)
+   establishing its logical precondition have been processed locally
+   (ordering is only guaranteed within a single event type's stream to a
+   single consumer, not across event types — see Events). A consumer must
+   treat such an early arrival as "not yet processable" and defer/retry it,
+   not as invalid or duplicate.
 4. **Auditable state** — every order state transition is caused by exactly
    one event, and that event is durably recorded.
 
@@ -142,14 +149,24 @@ event/order transition (e.g. by event id or by current entity state) and
 no-ops if so. This makes at-least-once delivery safe without a saga
 coordinator or distributed transaction.
 
+> **Known limitation:** the state mutation and the outcome publish above
+> are not atomic with each other (no transactional outbox or equivalent
+> two-phase mechanism). If a service commits its state change and then
+> fails before the publish succeeds, the event is never emitted and the
+> order can be left stuck in an intermediate state with no path forward.
+> Accepted as a known gap for this MVP to keep the messaging design simple;
+> would need an outbox pattern (or equivalent) to close.
+
 ## Order Placement Flow
 
 1. Customer calls Order Service to place an order.
 2. Order Service creates the order in state `CREATED`, persists it, and
-   publishes `OrderCreated { orderId, items, ... }`.
+   publishes `OrderCreated { orderId, items, totalAmount, paymentMethod }`.
 3. Inventory Service consumes `OrderCreated`:
    - If all items have sufficient stock: reserve (decrement available
-     stock) for every item, publish `InventoryReserved { orderId }`.
+     stock) for every item, publish `InventoryReserved { orderId,
+     totalAmount, paymentMethod }` (pass-through — Inventory Service
+     doesn't use these fields itself).
    - Else: publish `InventoryFailed { orderId, reason }` (no stock is
      decremented).
 4. Order Service consumes the result:
@@ -157,8 +174,9 @@ coordinator or distributed transaction.
    - `InventoryFailed` → order moves to `CANCELLED` (reason: out of
      stock). Flow ends.
 5. Payment Service consumes `InventoryReserved`:
-   - Attempts to charge the customer's payment method, using the order id
-     as an idempotency key so retried events never double-charge.
+   - Attempts to charge `totalAmount` to `paymentMethod` (both carried on
+     the event — see Events), using the order id as an idempotency key so
+     retried events never double-charge.
    - Success → publish `PaymentCompleted { orderId }`.
    - Failure → publish `PaymentFailed { orderId, reason }`.
 6. Order Service consumes the result:
@@ -273,8 +291,8 @@ cancellation — that transition is out of scope for now.)
 
 | Event | Producer | Consumer(s) | Payload (minimum) |
 |---|---|---|---|
-| `OrderCreated` | Order Service | Inventory Service | `orderId, items[]` |
-| `InventoryReserved` | Inventory Service | Order Service, Payment Service | `orderId` |
+| `OrderCreated` | Order Service | Inventory Service | `orderId, items[], totalAmount, paymentMethod` |
+| `InventoryReserved` | Inventory Service | Order Service, Payment Service | `orderId, totalAmount, paymentMethod` |
 | `InventoryFailed` | Inventory Service | Order Service | `orderId, reason` |
 | `PaymentCompleted` | Payment Service | Order Service | `orderId, paymentId` |
 | `PaymentFailed` | Payment Service | Order Service | `orderId, reason` |
@@ -296,6 +314,13 @@ completeness but is currently unused — no flow in this MVP produces it,
 since customer-initiated cancellation (the only source of refunds on a
 completed payment) is out of scope for now.
 
+`totalAmount` and `paymentMethod` originate on `OrderCreated` and are
+carried through unchanged on `InventoryReserved` — Payment Service owns no
+order data of its own (each service's database holds only the state it
+owns; see Data Model) and consumes only `InventoryReserved`, so this is the
+only way it can learn what to charge and how without a cross-service DB
+read.
+
 **`reason` values** (the three events above that carry a `reason` field use
 a fixed vocabulary, not free text):
 - `InventoryFailed.reason`: `OutOfStock` — the only cause this spec
@@ -308,8 +333,12 @@ a fixed vocabulary, not free text):
   — treated as an opaque diagnostic string, since no functional
   requirement branches on it.
 
-Events are partitioned/routed by `orderId` so that all events for a given
-order are processed in order by each consumer.
+Events are partitioned/routed by `orderId` so that, for a given order,
+events of the *same type* are delivered to a given consumer in the order
+they were published. This does not extend across different event types:
+two events produced by independent services (e.g. `InventoryReserved` and a
+downstream `PaymentCompleted`) carry no ordering guarantee relative to each
+other, since each is a separate stream. See NFR 3.
 
 ## Tech Stack
 
@@ -330,12 +359,16 @@ order are processed in order by each consumer.
   4 services) and over Azure Functions (Order Service is both an HTTP API
   and a Service Bus consumer in one logical service — Functions would
   force splitting that across trigger types/apps for no benefit).
-- Event bus: Azure Service Bus topics/subscriptions — one topic per event
-  type in the Events table below, with `orderId` used as the Service Bus
-  session id so per-order events stay ordered per consumer, matching the
-  "partitioned by orderId" requirement above. Chosen over Event Grid (no
-  strong ordering guarantees) and Event Hubs (built for high-throughput
-  streaming, not this event flow's transactional needs).
+- Event bus: Azure Service Bus topics/subscriptions, **Standard tier** —
+  one topic per event type in the Events table below, with `orderId` used
+  as the Service Bus session id so per-order events stay ordered per
+  consumer, matching the "partitioned by orderId" requirement above.
+  Standard tier is a hard requirement, not a cost optimization: **Basic
+  tier supports only queues, no topics/subscriptions at all, and sessions
+  require Standard or Premium** — this design cannot run on Basic. Premium
+  isn't needed for MVP demo throughput. Chosen over Event Grid (no strong
+  ordering guarantees) and Event Hubs (built for high-throughput streaming,
+  not this event flow's transactional needs).
 - Per-service state: Azure SQL Database, **Serverless tier**, one
   database per service, not shared — matching "each service owns exactly
   one piece of state." Serverless tier auto-pauses when idle, keeping
@@ -418,6 +451,34 @@ service's own Azure SQL database, not a shared one.
 | Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
 | UpdatedAt | DateTimeOffset | Last modification time |
 
+`InventoryReservations` (per-order record of what was reserved — required
+so `OrderCancelled` can release the exact quantities it reserved. Rows are
+deleted on release, so this table alone cannot answer "was this order ever
+processed" once released — see `InventoryOrderOutcomes` below for that.)
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Part of primary key; which order this reservation is for |
+| ProductId | string | Part of primary key; which SKU was reserved |
+| Quantity | int | Quantity reserved for this order/product, to restore on release |
+| ReservedAt | DateTimeOffset | Reservation timestamp |
+
+`InventoryOrderOutcomes` (permanent, never-deleted record of the outcome of
+processing one `OrderCreated` per order — the actual idempotency guard.
+`InventoryReservations` rows are deleted on release, so checking only that
+table can't tell a never-reserved order apart from a released one; a
+redelivered `OrderCreated` arriving after release would then be
+re-processed, decrementing stock a second time with no reservation left to
+release it, since Order Service already considers that order terminally
+`CANCELLED`. This table is checked first, before the `InventoryReservations`
+check, and is never cleaned up.)
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Primary key; which order this outcome is for |
+| Outcome | string | `Reserved` or `OutOfStock` — the result the first (and only) time this order's `OrderCreated` was processed |
+| ProcessedAt | DateTimeOffset | When this outcome was recorded |
+
 **Payment Service**
 
 `Payments`
@@ -425,7 +486,7 @@ service's own Azure SQL database, not a shared one.
 | Column | Type | Purpose |
 |---|---|---|
 | PaymentId | Guid | Primary key |
-| OrderId | Guid | Foreign key to `Orders` |
+| OrderId | Guid | Logical reference to `Orders` — not a DB-level foreign key, since `Orders` lives in Order Service's own database, a separate Azure SQL Database from Payment Service's (no cross-database FK constraints) |
 | IdempotencyKey | string | Duplicate-charge prevention identifier |
 | Amount | decimal | Charged value |
 | Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |
