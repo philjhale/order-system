@@ -35,6 +35,51 @@ inventory and processes payment via independent services reacting to events
 (no central orchestrator), and the order reaches a terminal state consistent
 with what actually happened to inventory and payment.
 
+## Tech Stack
+
+> This section is the only place a concrete technology is named. Everything
+> above (Objective, NFRs, Functional Requirements, High-Level Design, flows,
+> state machine, Events) is technology-agnostic by design and must stay that
+> way — read it without this section and it should still make complete
+> sense. Nothing here changes the architecture described above; it only
+> pins down what it runs on.
+
+**Language / runtime:** C# on .NET (latest LTS at implementation time).
+Each of the four services (Order, Inventory, Payment, Fulfillment) is a
+separate .NET service/process.
+
+**Cloud platform:** Azure.
+- Compute: Azure Container Apps (or AKS if the demo later needs more
+  orchestration control) running each service as an independent
+  container/app.
+- Event bus (choreography): Azure Service Bus topics/subscriptions — one
+  topic per event type in the Events table below, with `orderId` used as
+  the Service Bus session id so per-order events stay ordered per
+  consumer, matching the "partitioned by orderId" requirement above.
+- Per-service state: Azure SQL Database (or Cosmos DB if a service's
+  access pattern turns out to be better served key/value) — one database
+  per service, not shared, matching "each service owns exactly one piece
+  of state."
+- Idempotency/audit: order-events append log stored alongside the Order
+  Service's own database.
+
+**Infrastructure as code:** Terraform, provisioning:
+- Resource group(s) for the demo
+- Azure Container Apps environment (or AKS cluster) + one app/deployment
+  per service
+- Azure Service Bus namespace + topics/subscriptions per event type
+- Azure SQL / Cosmos DB instances per service
+- Any required networking, identity (managed identities for service-to-
+  service and service-to-bus auth), and secrets (Azure Key Vault)
+
+**Explicitly not decided here (deferred to Plan phase):**
+- Exact .NET version, project layout (solution structure, one repo vs.
+  multiple)
+- Container Apps vs. AKS (default to Container Apps for demo simplicity
+  unless a reason to use AKS shows up)
+- Azure SQL vs. Cosmos DB per service
+- CI/CD pipeline (GitHub Actions vs. Azure DevOps)
+
 ## Non-Functional Requirements
 
 Consistency is the only NFR this spec addresses:
@@ -292,8 +337,9 @@ order are processed in order by each consumer.
   defined in the source article (no invented states).
 - **Ask first:** introducing an orchestrator/saga coordinator, adding
   locking or TTL-based reservation semantics, adding services beyond the
-  four listed, choosing a concrete tech stack/message bus, adding
-  customer-initiated order cancellation, adding refund handling.
+  four listed, changing the tech stack from what's pinned in the Tech
+  Stack section, adding customer-initiated order cancellation, adding
+  refund handling.
 - **Never do:** mark an order `CONFIRMED` without a corresponding
   successful payment event; decrement inventory outside of the
   `OrderCreated`-triggered reservation step.
