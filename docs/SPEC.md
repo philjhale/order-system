@@ -93,22 +93,22 @@ Everything else (latency, throughput, uptime %) is out of scope.
 ## High-Level Design
 
 ```
-                    ┌────────────┐
-   Customer ──HTTP──▶   Order     │
-                    │  Service    │
-                    └─────┬───────┘
-                          │ publishes / consumes
-                          ▼
-                  ┌───────────────┐
-                  │   Event Bus    │   (topic per event type,
-                  │                │    partitioned by order_id)
-                  └───────┬───────┘
-              ┌───────────┼───────────────┐
-              ▼           ▼               ▼
-     ┌────────────┐ ┌────────────┐ ┌────────────────┐
-     │ Inventory  │ │  Payment   │ │  Fulfillment    │
-     │  Service   │ │  Service   │ │   Service       │
-     └────────────┘ └────────────┘ └─────────────────┘
+                    ┌─────────────┐
+   Customer ──HTTP─▶│    Order    │
+                    │   Service   │
+                    └──────┬──────┘
+                           │ publishes / consumes
+                           ▼
+                    ┌─────────────┐
+                    │  Event Bus  │  (topic per event type,
+                    │             │   partitioned by orderId)
+                    └──────┬──────┘
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │  Inventory  │ │   Payment   │ │ Fulfillment │
+    │   Service   │ │   Service   │ │   Service   │
+    └─────────────┘ └─────────────┘ └─────────────┘
 ```
 
 - **Order Service** — owns order records and the order state machine. Sole
@@ -230,39 +230,40 @@ Notes:
   append-only order-events record for audit purposes.
 
 ```
-                 ┌─────────┐
-                 │ CREATED │
-                 └────┬────┘
-        InventoryFailed   InventoryReserved
-                 │        └──────────────┐
-                 ▼                       ▼
-           ┌───────────┐        ┌───────────────┐
-           │ CANCELLED │◀───────│   RESERVED    │
-           └───────────┘  PaymentFailed └───┬───┘
-                                   PaymentCompleted
+                                    ┌────────────────┐
+                                    │    CREATED     │
+                                    └────────┬───────┘
+InventoryFailed                                InventoryReserved
+        ┌────────────────────────────────────┤
+        ▼                                    ▼
+  ┌───────────┐                     ┌────────────────┐
+  │ CANCELLED │◀── PaymentFailed ── │    RESERVED    │
+  └───────────┘                     └────────┬───────┘
+                            PaymentCompleted │
                                              ▼
-                                      ┌────────────┐
-                                      │ CONFIRMED  │
-                                      └─────┬──────┘
-                                        ships │
+                                    ┌────────────────┐
+                                    │   CONFIRMED    │
+                                    └────────┬───────┘
+                                       ships │
                                              ▼
-                                      ┌────────────┐
-                                      │  SHIPPED   │
-                                      └─────┬──────┘
-                                     delivers │
+                                    ┌────────────────┐
+                                    │    SHIPPED     │
+                                    └────────┬───────┘
+                                    delivers │
                                              ▼
-                                      ┌────────────┐
-                                      │ DELIVERED  │
-                                      └─────┬──────┘
-                                  return (post-MVP) │
+                                    ┌────────────────┐
+                                    │   DELIVERED    │
+                                    └────────┬───────┘
+                           return (post-MVP) │
                                              ▼
                                     ┌────────────────┐
                                     │ REFUND_PENDING │
-                                    └───────┬────────┘
-                                            ▼
-                                     ┌────────────┐
-                                     │  REFUNDED  │
-                                     └────────────┘
+                                    └────────┬───────┘
+                 refund processed (post-MVP) │
+                                             ▼
+                                    ┌────────────────┐
+                                    │    REFUNDED    │
+                                    └────────────────┘
 ```
 
 (No arrow from `RESERVED`/`CONFIRMED` back to `CANCELLED` via customer
