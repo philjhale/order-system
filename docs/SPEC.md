@@ -41,12 +41,13 @@ with what actually happened to inventory and payment.
 
 ## Tech Stack
 
-> This section is the only place a concrete technology is named. Everything
-> above (Objective, NFRs, Functional Requirements, High-Level Design, flows,
-> state machine, Events) is technology-agnostic by design and must stay that
-> way — read it without this section and it should still make complete
-> sense. Nothing here changes the architecture described above; it only
-> pins down what it runs on.
+> This section (and Data Model below) are the only places a concrete
+> technology is named. Everything above (Objective, NFRs, Functional
+> Requirements, High-Level Design, flows, state machine, Events) is
+> technology-agnostic by design and must stay that way — read it without
+> these sections and it should still make complete sense. Nothing here
+> changes the architecture described above; it only pins down what it
+> runs on.
 
 **Language / runtime:** C# on .NET 10 (LTS). Each of the four services
 (Order, Inventory, Payment, Fulfillment) is a separate .NET service/process.
@@ -85,6 +86,130 @@ with what actually happened to inventory and payment.
 
 **Explicitly not decided here (deferred to Plan phase):**
 - Project layout (solution structure, one repo vs. multiple)
+
+## Data Model
+
+Adapted from the source article's five tables, translated to C# entity
+classes (PascalCase members, .NET types, enums for status fields instead
+of free-text `VARCHAR`). Grouped by which service owns the table, per the
+"each service owns exactly one piece of state" rule in High-Level Design —
+each group lives in that service's own Azure SQL database, not a shared one.
+
+**Order Service** — owns `Order`, `OrderItem`, `OrderEvent`:
+
+```csharp
+public class Order
+{
+    public Guid OrderId { get; set; }
+    public Guid UserId { get; set; }
+    public OrderStatus Status { get; set; }
+    public decimal TotalAmount { get; set; }
+    public string Currency { get; set; } = default!;   // ISO 4217, e.g. "USD"
+    public ShippingAddress ShippingAddress { get; set; } = default!;
+    public string PaymentMethod { get; set; } = default!;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public List<OrderItem> Items { get; set; } = [];
+}
+
+public enum OrderStatus
+{
+    Created,
+    Reserved,
+    Confirmed,
+    Shipped,
+    Delivered,
+    Cancelled,
+    // RefundPending and Refunded are named in the source article's state
+    // machine but are out of scope for this MVP (see Objective / Order
+    // State Machine) — kept here only so the enum matches the full
+    // article state machine for traceability, not because anything sets them.
+    RefundPending,
+    Refunded
+}
+
+public class OrderItem
+{
+    public Guid OrderId { get; set; }
+    public string ProductId { get; set; } = default!;  // SKU
+    public int Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Subtotal { get; set; }               // Quantity * UnitPrice at purchase time
+}
+
+// Append-only audit log — one row per state transition (Non-Functional
+// Requirements: "Auditable state").
+public class OrderEvent
+{
+    public Guid EventId { get; set; }
+    public Guid OrderId { get; set; }
+    public string EventType { get; set; } = default!;   // e.g. "InventoryReserved"
+    public OrderStatus? FromState { get; set; }
+    public OrderStatus ToState { get; set; }
+    public JsonDocument EventData { get; set; } = default!; // event payload / context
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+// Shape not specified by the source article; a reasonable minimal
+// expansion of its "shipping_address JSONB" column.
+public class ShippingAddress
+{
+    public string Line1 { get; set; } = default!;
+    public string? Line2 { get; set; }
+    public string City { get; set; } = default!;
+    public string State { get; set; } = default!;
+    public string PostalCode { get; set; } = default!;
+    public string Country { get; set; } = default!;
+}
+```
+
+**Inventory Service** — owns `InventoryItem`:
+
+```csharp
+public class InventoryItem
+{
+    public string ProductId { get; set; } = default!;  // primary key (SKU)
+    public int Available { get; set; }
+    public int Reserved { get; set; }
+    public string WarehouseId { get; set; } = default!;
+
+    // The source article's "version" column is an optimistic-lock
+    // counter. Locking strategies are explicitly out of scope for this
+    // MVP (see Objective), so this field is kept for schema fidelity to
+    // the article but is not read or enforced by any service.
+    public int Version { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+```
+
+**Payment Service** — owns `Payment`:
+
+```csharp
+public class Payment
+{
+    public Guid PaymentId { get; set; }
+    public Guid OrderId { get; set; }
+    public string IdempotencyKey { get; set; } = default!;
+    public decimal Amount { get; set; }
+    public string Currency { get; set; } = default!;    // ISO 4217
+    public PaymentStatus Status { get; set; }
+    public string ProviderId { get; set; } = default!;   // external gateway reference
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+public enum PaymentStatus
+{
+    Pending,
+    Completed,
+    Failed,
+    // Refunded is named in the source article but refunds are out of
+    // scope for this MVP (see Objective) — kept for traceability only.
+    Refunded
+}
+```
 
 ## Non-Functional Requirements
 
