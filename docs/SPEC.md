@@ -39,131 +39,6 @@ inventory and processes payment via independent services reacting to events
 (no central orchestrator), and the order reaches a terminal state consistent
 with what actually happened to inventory and payment.
 
-## Tech Stack
-
-> This section (and Data Model below) are the only places a concrete
-> technology is named. Everything above (Objective, NFRs, Functional
-> Requirements, High-Level Design, flows, state machine, Events) is
-> technology-agnostic by design and must stay that way — read it without
-> these sections and it should still make complete sense. Nothing here
-> changes the architecture described above; it only pins down what it
-> runs on.
-
-**Language / runtime:** C# on .NET 10 (LTS). Each of the four services
-(Order, Inventory, Payment, Fulfillment) is a separate .NET service/process.
-
-**Cloud platform:** Azure.
-- Compute: Azure Container Apps running each service as an independent
-  container/app. Chosen over AKS (unnecessary orchestration overhead for
-  4 services) and over Azure Functions (Order Service is both an HTTP API
-  and a Service Bus consumer in one logical service — Functions would
-  force splitting that across trigger types/apps for no benefit).
-- Event bus (choreography): Azure Service Bus topics/subscriptions — one
-  topic per event type in the Events table below, with `orderId` used as
-  the Service Bus session id so per-order events stay ordered per
-  consumer, matching the "partitioned by orderId" requirement above.
-  Chosen over Event Grid (no strong ordering guarantees) and Event Hubs
-  (built for high-throughput streaming, not transactional choreography).
-- Per-service state: Azure SQL Database, **Serverless tier**, one
-  database per service, not shared — matching "each service owns exactly
-  one piece of state." Serverless tier auto-pauses when idle, keeping
-  demo cost near zero while still giving Inventory/Payment the
-  relational/transactional guarantees the consistency NFRs require.
-  Cosmos DB was considered and ruled out on cost (RU-based pricing) with
-  no offsetting benefit for this access pattern.
-- Idempotency/audit: order-events append log stored alongside the Order
-  Service's own database.
-
-**CI/CD:** GitHub Actions.
-
-**Infrastructure as code:** Terraform, provisioning:
-- Resource group(s) for the demo
-- Azure Container Apps environment + one app/deployment per service
-- Azure Service Bus namespace + topics/subscriptions per event type
-- Azure SQL Database (Serverless tier) instance per service
-- Any required networking, identity (managed identities for service-to-
-  service and service-to-bus auth), and secrets (Azure Key Vault)
-
-**Explicitly not decided here (deferred to Plan phase):**
-- Project layout (solution structure, one repo vs. multiple)
-
-## Data Model
-
-Adapted from the source article's five tables, with column names switched
-to C# naming convention (PascalCase, e.g. `OrderId` instead of
-`order_id`) and .NET types substituted for their SQL equivalents. Grouped
-by which service owns the table, per the "each service owns exactly one
-piece of state" rule in High-Level Design — each group lives in that
-service's own Azure SQL database, not a shared one.
-
-**Order Service**
-
-`Orders`
-
-| Column | Type | Purpose |
-|---|---|---|
-| OrderId | Guid | Primary key |
-| UserId | Guid | Customer reference |
-| Status | OrderStatus | `Created / Reserved / Confirmed / Shipped / Delivered / Cancelled` (`RefundPending` / `Refunded` also exist per the source article's state machine but are unused — refunds are out of scope for this MVP) |
-| TotalAmount | decimal | Order value |
-| Currency | string(3) | ISO 4217 currency code |
-| ShippingAddress | string (JSON) | Delivery location — shape not specified by the source article |
-| PaymentMethod | string | Payment identifier |
-| CreatedAt | DateTimeOffset | Creation timestamp |
-| UpdatedAt | DateTimeOffset | Last modification timestamp |
-
-`OrderItems`
-
-| Column | Type | Purpose |
-|---|---|---|
-| OrderId | Guid | Foreign key to `Orders` |
-| ProductId | string | SKU identifier |
-| Quantity | int | Unit count |
-| UnitPrice | decimal | Price per unit at purchase |
-| Subtotal | decimal | `Quantity * UnitPrice` |
-
-`OrderEvents` (append-only audit log — Non-Functional Requirements:
-"Auditable state")
-
-| Column | Type | Purpose |
-|---|---|---|
-| EventId | Guid | Primary key |
-| OrderId | Guid | Foreign key to `Orders` |
-| EventType | string | Event classification, e.g. `InventoryReserved` |
-| FromState | OrderStatus? | Previous order state |
-| ToState | OrderStatus | New order state |
-| EventData | string (JSON) | Metadata and context |
-| CreatedAt | DateTimeOffset | Event occurrence time |
-
-**Inventory Service**
-
-`InventoryItems`
-
-| Column | Type | Purpose |
-|---|---|---|
-| ProductId | string | Primary key (SKU) |
-| Available | int | Purchasable quantity |
-| Reserved | int | Quantity held by pending orders |
-| WarehouseId | string | Physical storage location |
-| Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
-| UpdatedAt | DateTimeOffset | Last modification time |
-
-**Payment Service**
-
-`Payments`
-
-| Column | Type | Purpose |
-|---|---|---|
-| PaymentId | Guid | Primary key |
-| OrderId | Guid | Foreign key to `Orders` |
-| IdempotencyKey | string | Duplicate-charge prevention identifier |
-| Amount | decimal | Charged value |
-| Currency | string(3) | ISO 4217 currency code |
-| Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |
-| ProviderId | string | External payment gateway reference |
-| CreatedAt | DateTimeOffset | Initiation time |
-| CompletedAt | DateTimeOffset? | Completion time |
-
 ## Non-Functional Requirements
 
 Consistency is the only NFR this spec addresses:
@@ -412,6 +287,131 @@ completed payment) is out of scope for now.
 
 Events are partitioned/routed by `orderId` so that all events for a given
 order are processed in order by each consumer.
+
+## Tech Stack
+
+> This section (and Data Model below) are the only places a concrete
+> technology is named. Everything above (Objective, NFRs, Functional
+> Requirements, High-Level Design, flows, state machine, Events) is
+> technology-agnostic by design and must stay that way — read it without
+> these sections and it should still make complete sense. Nothing here
+> changes the architecture described above; it only pins down what it
+> runs on.
+
+**Language / runtime:** C# on .NET 10 (LTS). Each of the four services
+(Order, Inventory, Payment, Fulfillment) is a separate .NET service/process.
+
+**Cloud platform:** Azure.
+- Compute: Azure Container Apps running each service as an independent
+  container/app. Chosen over AKS (unnecessary orchestration overhead for
+  4 services) and over Azure Functions (Order Service is both an HTTP API
+  and a Service Bus consumer in one logical service — Functions would
+  force splitting that across trigger types/apps for no benefit).
+- Event bus (choreography): Azure Service Bus topics/subscriptions — one
+  topic per event type in the Events table below, with `orderId` used as
+  the Service Bus session id so per-order events stay ordered per
+  consumer, matching the "partitioned by orderId" requirement above.
+  Chosen over Event Grid (no strong ordering guarantees) and Event Hubs
+  (built for high-throughput streaming, not transactional choreography).
+- Per-service state: Azure SQL Database, **Serverless tier**, one
+  database per service, not shared — matching "each service owns exactly
+  one piece of state." Serverless tier auto-pauses when idle, keeping
+  demo cost near zero while still giving Inventory/Payment the
+  relational/transactional guarantees the consistency NFRs require.
+  Cosmos DB was considered and ruled out on cost (RU-based pricing) with
+  no offsetting benefit for this access pattern.
+- Idempotency/audit: order-events append log stored alongside the Order
+  Service's own database.
+
+**CI/CD:** GitHub Actions.
+
+**Infrastructure as code:** Terraform, provisioning:
+- Resource group(s) for the demo
+- Azure Container Apps environment + one app/deployment per service
+- Azure Service Bus namespace + topics/subscriptions per event type
+- Azure SQL Database (Serverless tier) instance per service
+- Any required networking, identity (managed identities for service-to-
+  service and service-to-bus auth), and secrets (Azure Key Vault)
+
+**Explicitly not decided here (deferred to Plan phase):**
+- Project layout (solution structure, one repo vs. multiple)
+
+## Data Model
+
+Adapted from the source article's five tables, with column names switched
+to C# naming convention (PascalCase, e.g. `OrderId` instead of
+`order_id`) and .NET types substituted for their SQL equivalents. Grouped
+by which service owns the table, per the "each service owns exactly one
+piece of state" rule in High-Level Design — each group lives in that
+service's own Azure SQL database, not a shared one.
+
+**Order Service**
+
+`Orders`
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Primary key |
+| UserId | Guid | Customer reference |
+| Status | OrderStatus | `Created / Reserved / Confirmed / Shipped / Delivered / Cancelled` (`RefundPending` / `Refunded` also exist per the source article's state machine but are unused — refunds are out of scope for this MVP) |
+| TotalAmount | decimal | Order value |
+| Currency | string(3) | ISO 4217 currency code |
+| ShippingAddress | string (JSON) | Delivery location — shape not specified by the source article |
+| PaymentMethod | string | Payment identifier |
+| CreatedAt | DateTimeOffset | Creation timestamp |
+| UpdatedAt | DateTimeOffset | Last modification timestamp |
+
+`OrderItems`
+
+| Column | Type | Purpose |
+|---|---|---|
+| OrderId | Guid | Foreign key to `Orders` |
+| ProductId | string | SKU identifier |
+| Quantity | int | Unit count |
+| UnitPrice | decimal | Price per unit at purchase |
+| Subtotal | decimal | `Quantity * UnitPrice` |
+
+`OrderEvents` (append-only audit log — Non-Functional Requirements:
+"Auditable state")
+
+| Column | Type | Purpose |
+|---|---|---|
+| EventId | Guid | Primary key |
+| OrderId | Guid | Foreign key to `Orders` |
+| EventType | string | Event classification, e.g. `InventoryReserved` |
+| FromState | OrderStatus? | Previous order state |
+| ToState | OrderStatus | New order state |
+| EventData | string (JSON) | Metadata and context |
+| CreatedAt | DateTimeOffset | Event occurrence time |
+
+**Inventory Service**
+
+`InventoryItems`
+
+| Column | Type | Purpose |
+|---|---|---|
+| ProductId | string | Primary key (SKU) |
+| Available | int | Purchasable quantity |
+| Reserved | int | Quantity held by pending orders |
+| WarehouseId | string | Physical storage location |
+| Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
+| UpdatedAt | DateTimeOffset | Last modification time |
+
+**Payment Service**
+
+`Payments`
+
+| Column | Type | Purpose |
+|---|---|---|
+| PaymentId | Guid | Primary key |
+| OrderId | Guid | Foreign key to `Orders` |
+| IdempotencyKey | string | Duplicate-charge prevention identifier |
+| Amount | decimal | Charged value |
+| Currency | string(3) | ISO 4217 currency code |
+| Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |
+| ProviderId | string | External payment gateway reference |
+| CreatedAt | DateTimeOffset | Initiation time |
+| CompletedAt | DateTimeOffset? | Completion time |
 
 ## Boundaries
 
