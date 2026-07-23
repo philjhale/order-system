@@ -447,6 +447,3 @@ service's own Azure SQL database, not a shared one.
   always whole-order?
 - What identifies a "payment method" at the API boundary — out of scope
   for a tech-agnostic spec, to be decided at implementation time.
-- The `DELIVERED → REFUND_PENDING → REFUNDED` return flow is named in the
-  state machine per the source article but has no functional requirement
-  or event flow defined yet — is it needed for MVP or fully deferred?
