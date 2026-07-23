@@ -48,7 +48,7 @@ infra/
   terraform-bootstrap/    # one-time, local state: remote-state storage account
   terraform/
     shared/               # resource group, Container Apps environment,
-                           #   Service Bus namespace, Key Vault, managed identities,
+                           #   Service Bus namespace, shared ACR-pull managed identity,
                            #   Azure Container Registry (one, shared by all 4 services)
 .github/
   workflows/
@@ -70,9 +70,11 @@ Infra is split per-service (not one monolithic config) so each service's
 phase can add exactly the infra slice it needs — see "Delivery / branching
 strategy" and the incremental topic/subscription wiring under each phase
 below. Only the genuinely cross-cutting Terraform (resource group,
-Container Apps environment, Service Bus namespace, Key Vault, ACR) stays
-under the top-level `infra/terraform/shared/`, since no single service
-folder owns it.
+Container Apps environment, Service Bus namespace, ACR) stays under the
+top-level `infra/terraform/shared/`, since no single service folder
+owns it. Per-service data-plane identities (Service Bus RBAC, SQL AAD
+auth) live in each service's own Terraform instead (task 5), since
+they're scoped to one service, not cross-cutting.
 
 Rationale: this trades the convenience of a single root `.sln` for folder
 boundaries that mirror how the services actually deploy — independently,
@@ -91,35 +93,42 @@ always uses the Service Bus implementation.
 
 ## Delivery / branching strategy
 
-**Each phase (0–5) ships as its own PR directly into `main`** — no single
-big PR at the end, and no long-lived integration branch spanning the whole
-feature. Concretely:
+**Each numbered task (1–21) ships as its own PR directly into `main`** — no
+single big PR per phase, let alone at the end, and no long-lived
+integration branch spanning the whole feature. A phase (0–5) is a grouping
+label for related tasks and a checkpoint, not a PR boundary — bundling an
+entire phase's tasks into one PR is too large a diff to review or bisect
+safely (e.g. Phase 0's four tasks span solution scaffolding, event
+contracts, the messaging abstraction, and Azure/Terraform bootstrap —
+unrelated concerns that should merge independently). Concretely:
 
-- For each phase: branch off the current tip of `main` (e.g.
-  `feature/order-system-mvp-phase-0`, `-phase-1`, ... matching the phase
-  numbers above), implement only that phase's task(s), review, open a PR
-  into `main`, and get it merged before branching the next phase — the next
-  phase's branch is cut from `main` *after* the previous phase's PR has
-  landed, so it always includes the previous phase's code. This is
-  trunk-based delivery applied at phase granularity instead of
-  whole-feature granularity.
-- Multi-task phases (e.g. Phase 0's three tasks, Phase 1's three tasks)
-  land as separate commits within that phase's single PR — one commit per
-  task, one PR per phase — matching the "atomic commits, small PRs" guidance
-  already in `git-workflow-and-versioning`.
+- For each task: branch off the current tip of `main` (e.g.
+  `feature/order-system-mvp-task-1`, `-task-2`, ... matching the task
+  numbers above), implement only that task, review, open a PR into `main`,
+  and get it merged before branching the next task — the next task's branch
+  is cut from `main` *after* the previous task's PR has landed, so it
+  always includes every prior task's code. This is trunk-based delivery
+  applied at task granularity instead of phase or whole-feature granularity.
+  A task's PR is typically a single commit; only split into multiple
+  commits if the task itself has genuinely separable sub-steps worth
+  reviewing independently.
+- A task whose work spans two service folders at once (e.g. task 14 also
+  adds Order Service's subscriptions to Inventory's new topics, per task 6's
+  `needs:` wiring) still ships as that one task's single PR — the PR
+  boundary is "one task," not "one service folder."
 - This `feature/order-system-mvp` branch/worktree carries the planning
   artifacts (`tasks/plan.md`, `tasks/todo.md`, `tasks/feature-stage.md`)
-  and is itself merged into `main` via its own PR *before* Phase 0 starts —
-  so `main` carries the plan as part of its history. Each subsequent phase
+  and is itself merged into `main` via its own PR *before* task 1 starts —
+  so `main` carries the plan as part of its history. Each subsequent task
   branch is then cut from `main` (which already includes this plan), gets
   its own PR, and merges independently; the plan isn't re-merged with each
-  phase.
-- `/agent-skills:review` runs against each phase's diff before its PR is
+  task.
+- `/agent-skills:review` runs against each task's diff before its PR is
   opened. `/agent-skills:ship`'s full go/no-go checklist runs once, after
-  the last phase (5) has merged, as a final check on the assembled system
-  on `main` — not repeated for every phase.
+  the last task (21) has merged, as a final check on the assembled system
+  on `main` — not repeated for every task.
 - The stage tracker (`tasks/feature-stage.md`) checks off "build" only once
-  all 6 phase PRs (0–5) have merged; the "ship" stage then covers the final
+  all 21 task PRs have merged; the "ship" stage then covers the final
   system-wide checklist described above.
 - Each service phase (1–4) leaves the system in a real, deployed state on
   Azure by the time its PR merges — infra and CI/CD land incrementally
@@ -139,7 +148,7 @@ Contracts ──┬─▶ Messaging ──▶ OrderService ──┬─▶ Inven
             └──────────────────────────────────┴──────────────────────┴─────────────────────┴────────────────────────▶ (all)
 
 Shared Terraform foundation (resource group, Container Apps environment,
-Service Bus namespace, Key Vault, managed identities) sits under Phase 0 —
+Service Bus namespace, shared ACR-pull managed identity) sits under Phase 0 —
 every service's own Terraform module depends on it. Each service phase then
 adds: its own Container App + SQL DB (if any) + the topics it *owns*, plus
 subscriptions *to* topics that already exist by that point. Because Order
@@ -179,7 +188,12 @@ state before the next phase starts.
    - *Verify:* unit tests roundtrip-(de)serialize every event DTO.
 3. **Messaging abstraction** — `IEventPublisher`, `IEventSubscriber`
    (routing/partitioning by `orderId`), Azure Service Bus implementation
-   (session id = `orderId`), in-memory implementation for tests/local dev.
+   (session id = `orderId`) authenticating via `DefaultAzureCredential`
+   against the namespace's `.servicebus.windows.net` hostname — passwordless,
+   no connection string/secret; the identity it resolves at runtime is each
+   service's own user-assigned managed identity (task 5), which must hold
+   Service Bus data-plane RBAC on the namespace (wired per-service in tasks
+   10/14/17/19). In-memory implementation for tests/local dev.
    `IEventSubscriber` exposes an explicit abandon/retry outcome (in addition
    to complete/dead-letter) so a handler can signal "not yet processable,
    redeliver later" distinct from "processed" or "poison message" — needed
@@ -200,7 +214,7 @@ state before the next phase starts.
    `az account set --subscription <id>`), and register the resource
    providers this MVP needs (`az provider register --namespace` for
    `Microsoft.App`, `Microsoft.ServiceBus`, `Microsoft.Sql`,
-   `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`, `Microsoft.Storage`)
+   `Microsoft.ContainerRegistry`, `Microsoft.Storage`)
    — on a subscription that's never used these services, `terraform apply`
    fails with `MissingSubscriptionRegistration` until this is done, and
    registration can take several minutes to complete. Then:
@@ -219,37 +233,136 @@ state before the next phase starts.
    `azurerm_servicebus_namespace` with `sku = "Standard"` (no topics yet —
    each service phase below adds its own) — Standard is mandatory per Tech
    Stack: Basic supports neither topics/subscriptions nor the sessions this
-   design's ordering guarantee depends on — Key Vault, one shared
-   user-assigned managed identity for ACR pulls, and one Azure Container
-   Registry (ACR) shared by all 4 services (one registry, one set of
-   push/pull credentials — each service gets its own repository *within*
-   that registry, e.g. `order-service`, `inventory-service`; grant this
-   shared identity `AcrPull` on the registry). Each service's own Terraform
-   (tasks 10/14/17/19) then attaches this same identity to its Container App
-   and references it in that Container App's `registry` block as the pull
-   credential — ACR authentication is configured per-Container-App, not at
-   the Container Apps environment level, so the environment resource itself
-   grants nothing on its own. Every per-service Terraform module below
-   references this shared foundation via remote state / data sources.
+   design's ordering guarantee depends on — one shared user-assigned managed
+   identity for ACR pulls, and one Azure Container Registry (ACR) shared by
+   all 4 services (one registry, one set of push/pull credentials — each
+   service gets its own repository *within* that registry, e.g.
+   `order-service`, `inventory-service`; grant this shared identity `AcrPull`
+   on the registry). Each service's own Terraform (tasks 10/14/17/19) then
+   attaches this same identity to its Container App and references it in
+   that Container App's `registry` block as the pull credential — ACR
+   authentication is configured per-Container-App, not at the Container Apps
+   environment level, so the environment resource itself grants nothing on
+   its own. Every per-service Terraform module below references this shared
+   foundation via remote state / data sources.
+
+   **Data-plane auth (Service Bus + SQL) is passwordless, no Key Vault
+   needed.** Each service authenticates to Service Bus and to its own SQL
+   database via its own user-assigned managed identity (one identity per
+   service, created in that service's own Terraform in tasks 10/14/17/19 —
+   distinct from the shared ACR-pull identity above, since Service Bus RBAC
+   and SQL AAD-user grants are naturally scoped per-service, not shared):
+   - *Service Bus:* each service's identity is granted `Azure Service Bus
+     Data Owner` scoped to the namespace (simplest correct RBAC for MVP;
+     narrower per-topic/per-subscription roles are unnecessary complexity
+     here) — wired in that service's own Terraform task once its
+     Container App resource exists, since the role assignment's principal
+     is that Container App's identity.
+   - *SQL:* each service's own Azure SQL logical server (provisioned in
+     tasks 10/14/17) is configured Azure-AD-only auth (no SQL-auth
+     admin/password at all), with an `azuread_administrator` block naming
+     an AAD **group** (e.g. `sql-admins-order-system`, created in task 5)
+     as the server's AAD admin — Azure SQL's `azuread_administrator` only
+     accepts a user or group, not a bare service principal/app
+     registration, so the CI OIDC app registration (task 6) is added as a
+     *member* of this group rather than named directly (a supported
+     operation for a service-principal member — Azure SQL resolves group
+     admin membership via a live Graph lookup on the token's `oid` at
+     connection time, not a token claim, so this works the same as it
+     would for a user member); a bare-SP admin block would fail to apply
+     or fail to authenticate.
+
+     **Ordering note:** this group-membership resource needs the CI app
+     registration's object id, which task 6 creates — task 6's app
+     registration + federated-credential creation (the one-time manual
+     bootstrap portion, same category as task 4's manual Azure setup) must
+     therefore happen *before* task 5's first `terraform apply`, even
+     though task 6 is numbered after task 5. Do this bootstrap step
+     alongside task 4's manual preconditions, not literally in task-number
+     order.
+
+     That service's managed identity is added as a contained database user
+     via `CREATE USER ... FROM EXTERNAL PROVIDER` T-SQL, with
+     `db_datareader`, `db_datawriter`, **and `db_ddladmin`** roles — the
+     first two alone only grant DML (SELECT/INSERT/UPDATE/DELETE); EF Core
+     migrations issue DDL (`CREATE TABLE`, `CREATE INDEX`, the
+     `__EFMigrationsHistory` table itself), which requires `db_ddladmin` as
+     well, or the very first migration against a freshly-provisioned schema-
+     less DB fails on a permissions error — **run from inside the same
+     `azurerm_container_app_job` that runs EF Core migrations (task 10), not
+     via Terraform `null_resource`/`local-exec`**, since `local-exec` runs
+     on the
+     GitHub-hosted runner, which the SQL network path below deliberately
+     does not allow to reach the server; a Terraform-level `local-exec`
+     here would hit the identical firewall block and silently never create
+     the user.
+
+     Concretely, and this is the part that actually has to carry a real
+     credential across the CI-to-Azure boundary: the CI OIDC identity is
+     federated (no client secret, no attachable managed identity), so
+     `DefaultAzureCredential` running *inside* the container app job cannot
+     resolve to it — the job has no way to "be" the CI identity just
+     because that identity is the AAD group admin. Instead, the GitHub
+     Actions workflow step (already authenticated via `azure/login` per
+     task 6's OIDC credential) runs `az account get-access-token
+     --resource https://database.windows.net` *before* starting the job,
+     and passes the resulting token into `az containerapp job start` as a
+     one-shot secret/env var. The job's startup script uses that raw token
+     for the `CREATE USER` connection specifically (e.g. `sqlcmd
+     --authentication-method=ActiveDirectoryAccessToken -P <token>`, or
+     ADO.NET's `SqlConnection.AccessToken` property) — this is the only
+     step in the whole plan that uses a short-lived token instead of a
+     resolved managed identity, because it's the one step that must
+     authenticate as the CI principal rather than the service's own
+     identity. Only *after* the contained user exists does the job run
+     `dotnet ef database update` using the service's own managed identity
+     via `DefaultAzureCredential` (which does resolve correctly, since that
+     identity is attached to the job resource) — the same identity the
+     running Container App uses afterward.
+   - This eliminates the need for Key Vault or any stored connection
+     string/secret anywhere in the system — the spec's Tech Stack mentions
+     Key Vault as the available secrets mechanism *if* one is needed, but
+     since every credential here is a resolved managed-identity token, none
+     is; Key Vault is therefore dropped from this plan rather than
+     provisioned unused. (If a real secret is ever needed post-MVP — e.g. a
+     third-party payment gateway API key once Payment Service stops
+     simulating — add Key Vault + a secret reference on that service's
+     Container App at that point, not before.)
+
+   **SQL network path:** each service's SQL server (tasks 10/14/17) enables
+   "Allow Azure services and resources to access this server"
+   (`azurerm_mssql_firewall_rule` with start/end IP `0.0.0.0`) — sufficient
+   because both the running Container App and the CI migration step (see
+   tasks 10/14/17, revised below) reach SQL from inside Azure, never from
+   the public GitHub-hosted runner directly.
    - *Verify:* `terraform validate` + `terraform plan` clean; Service Bus
      namespace exists at `Standard` SKU; ACR exists and the shared
-     user-assigned identity has `AcrPull` on it.
+     user-assigned identity has `AcrPull` on it; no Key Vault resource is
+     provisioned and no connection-string secret exists anywhere in
+     Terraform state or GitHub secrets for SQL or Service Bus.
 6. **CI/CD skeleton** — first, create the Azure AD app registration with
    *two* federated OIDC credentials (no long-lived secret): one with
-   subject `repo:{org}/{repo}:pull_request` (covers every phase's
+   subject `repo:{org}/{repo}:pull_request` (covers every task's
    PR-triggered build/test/`terraform plan` run, regardless of which
    branch the PR is from) and one with subject
    `repo:{org}/{repo}:ref:refs/heads/main` (covers post-merge `terraform
    apply`/deploy runs on `main`). A single branch-scoped credential would
-   only authenticate one branch's runs and break CI on every other phase's
-   PR — this plan's delivery strategy runs six phase branches through PR
-   CI, so both subjects are required, not optional. Grant the app
-   `Contributor` at the *subscription* scope, not resource-group scope —
-   task 5's Terraform is what creates the resource group, so a role
-   assignment scoped to that group can't exist before task 5's first
-   `apply` runs, and that first `apply` is itself a CI job using this same
-   identity. Subscription-scope avoids the chicken-and-egg: the identity
-   can create the resource group itself in task 5's first CI run. Store its
+   only authenticate one branch's runs and break CI on every other task's
+   PR — this plan's delivery strategy runs 21 task branches through PR
+   CI, so both subjects are required, not optional. Grant the app both
+   `Contributor` *and* `User Access Administrator` at the *subscription*
+   scope, not resource-group scope — task 5's Terraform is what creates the
+   resource group, so a role assignment scoped to that group can't exist
+   before task 5's first `apply` runs, and that first `apply` is itself a CI
+   job using this same identity. Subscription-scope avoids the
+   chicken-and-egg: the identity can create the resource group itself in
+   task 5's first CI run. `Contributor` alone is not sufficient: its
+   `NotActions` explicitly exclude `Microsoft.Authorization/*/Write`, so it
+   cannot create the `azurerm_role_assignment` resources this plan depends
+   on throughout — the shared ACR-pull grant (task 5) and each service's
+   `Azure Service Bus Data Owner` grant (tasks 10/14/17/19) would otherwise
+   fail on `terraform apply` with an authorization error; `User Access
+   Administrator` closes that gap. Store its
    client/tenant/subscription IDs as GitHub repo secrets/vars — every job
    below depends on this identity existing, so it's a prerequisite step of
    this task, not a separate one. Then: a reusable *callable* workflow
@@ -346,8 +459,17 @@ state before the next phase starts.
     `services/order-service/Dockerfile` (multi-stage; build context is the
     *repo root*, not the service folder, so it can `COPY` the `shared/`
     projects it references); `services/order-service/infra/terraform/`:
-    Container App (image pulled from the shared ACR's `order-service`
-    repository; `min_replicas = 1` — Order Service is also a Service Bus
+    a dedicated user-assigned managed identity for this service (separate
+    from the shared ACR-pull identity in task 5), granted `Azure Service Bus
+    Data Owner` on the shared namespace (data-plane auth — task 3/5);
+    Azure SQL Serverless DB with Azure-AD-only auth, the
+    `azurerm_mssql_firewall_rule` allowing Azure services (task 5), and this
+    service's identity added as a contained DB user via the
+    `local-exec`/T-SQL step described in task 5; Container App (image pulled
+    from the shared ACR's `order-service` repository; both managed
+    identities attached — the shared one for the `registry` block's ACR
+    pull credential, this service's own for its runtime env/`DefaultAzureCredential`
+    resolution; `min_replicas = 1` — Order Service is also a Service Bus
     consumer of `InventoryReserved`/`InventoryFailed`/`PaymentCompleted`/
     `PaymentFailed`/`InventoryReleased`/`OrderShipped`/`OrderDelivered`
     (task 9), and Container Apps' default scaling only reacts to HTTP
@@ -355,22 +477,36 @@ state before the next phase starts.
     order, then the async pipeline runs with no further HTTP activity) it
     would scale to zero and never wake to consume those events, leaving the
     order stuck in `CREATED` forever. Same reasoning as Inventory/Payment/
-    Fulfillment's `min_replicas = 1` in tasks 14/17/19), Azure SQL Serverless
-    DB, and the topics Order *owns*
-    (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job builds
-    the image, pushes to ACR tagged with the commit SHA, runs EF Core
-    migrations against the SQL DB (dedicated CI/CD job step, before the new
-    Container App revision goes live) wrapped in a short retry/wait loop —
-    a one-shot `dotnet ef database update` isn't covered by the
-    application-level `EnableRetryOnFailure()` from task 7, and can hit a
-    freshly-idle Serverless DB's resume window — then deploys the Container
-    App pinned to that tag. Every subsequent service's migration step
-    (tasks 14, 17) follows this same retry-wrapped pattern.
+    Fulfillment's `min_replicas = 1` in tasks 14/17/19); and the topics Order
+    *owns* (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`).
+
+    **Migrations run inside Azure, not from the GitHub-hosted runner** — the
+    runner has no network path to the SQL server (firewall only allows
+    Azure services, task 5) and no way to acquire the service's managed-
+    identity token for AAD SQL auth. Instead, this service's Terraform also
+    defines a `azurerm_container_app_job` (manual-trigger, same image, same
+    Container Apps environment) whose command first runs the `CREATE USER
+    ... FROM EXTERNAL PROVIDER` T-SQL for this service's own identity
+    (idempotent, using the short-lived AAD access token the CI workflow
+    step fetches and passes in — task 5's SQL bullet has the full
+    credential hand-off), then runs `dotnet ef database update`
+    (authenticating as this service's own managed identity, now a
+    contained user, via `DefaultAzureCredential`); CI/CD builds the image,
+    pushes to ACR tagged with the commit SHA, then invokes `az containerapp
+    job start` against that job (wrapped in a short retry/wait loop — a
+    one-shot run
+    isn't covered by the application-level `EnableRetryOnFailure()` from
+    task 7, and can hit a freshly-idle Serverless DB's resume window) and
+    polls for the job execution to succeed before deploying the new
+    Container App revision. Every subsequent service's migration step
+    (tasks 14, 17) follows this same in-Azure job pattern.
     - *Verify:* `docker build -f services/order-service/Dockerfile .` (run
       from repo root) succeeds locally; `terraform plan` clean inside
-      `services/order-service/infra/terraform/`; CI workflow builds,
-      pushes, migrates the DB schema, and deploys successfully against a
-      freshly-provisioned (schema-less) DB.
+      `services/order-service/infra/terraform/`; the service's managed
+      identity shows as a contained user in the SQL DB with `Azure Service
+      Bus Data Owner` on the namespace; CI workflow builds, pushes, runs the
+      migration Container Apps Job successfully against a freshly-provisioned
+      (schema-less) DB, and deploys.
 
 **Checkpoint:** Order Service is deployed and fully testable (API +
 consumers) standalone, with hand-published inventory/payment events (via
@@ -429,8 +565,12 @@ before starting Phase 2.
 14. **Inventory Service Dockerfile, Terraform + deploy** —
     `services/inventory-service/Dockerfile` (same repo-root-build-context
     pattern as Order Service's); `services/inventory-service/infra/terraform/`:
-    Container App (image from the shared ACR's `inventory-service`
-    repository; `min_replicas = 1` — Inventory has no HTTP traffic to
+    same per-service identity / Service Bus RBAC / SQL AAD-auth + firewall
+    pattern as task 10 (own managed identity granted `Azure Service Bus Data
+    Owner` on the namespace and added as a contained user on its own SQL
+    DB); Container App (image from the shared ACR's `inventory-service`
+    repository, both the shared ACR-pull identity and this service's own
+    identity attached; `min_replicas = 1` — Inventory has no HTTP traffic to
     trigger the default scale-from-zero, so without a nonzero floor a
     consumer with 0 replicas never picks up messages published to its
     subscriptions), Azure SQL Serverless DB, Inventory's subscriptions to
@@ -443,9 +583,10 @@ before starting Phase 2.
     image and deploys Inventory Service; per task 6, Order Service's
     `terraform apply` job in this PR's workflow run declares `needs:` on
     Inventory Service's `terraform apply` job, so Order's subscriptions
-    aren't applied before Inventory's topics exist. CI/CD job also runs EF
-    Core migrations against Inventory's DB before its Container App
-    revision goes live (same pattern as task 10).
+    aren't applied before Inventory's topics exist. CI/CD job also runs the
+    migration Container Apps Job against Inventory's DB before its Container
+    App revision goes live (same in-Azure pattern as task 10, not a direct
+    connection from the GitHub-hosted runner).
     - *Verify:* `docker build -f services/inventory-service/Dockerfile .`
       succeeds locally; `terraform plan` clean for both service folders'
       Terraform; CI builds, pushes, migrates the DB schema, and deploys; a
@@ -468,19 +609,21 @@ before starting Phase 2.
       "no uncharged confirmation" NFR).
 17. **Payment Service Dockerfile, Terraform + deploy** —
     `services/payment-service/Dockerfile` (same pattern);
-    `services/payment-service/infra/terraform/`: Container App (image from
-    the shared ACR's `payment-service` repository; `min_replicas = 1`, same
-    reason as Inventory's — no HTTP traffic to scale from zero on), Azure
-    SQL Serverless DB, Payment's subscription to Inventory's
-    `InventoryReserved` topic,
-    and the topics Payment *owns* (`PaymentCompleted`, `PaymentFailed`);
-    also adds Order Service's subscriptions to these two new topics (in
+    `services/payment-service/infra/terraform/`: same per-service identity /
+    Service Bus RBAC / SQL AAD-auth + firewall pattern as task 10; Container
+    App (image from the shared ACR's `payment-service` repository, both the
+    shared ACR-pull identity and this service's own identity attached;
+    `min_replicas = 1`, same reason as Inventory's — no HTTP traffic to
+    scale from zero on), Azure SQL Serverless DB, Payment's subscription to
+    Inventory's `InventoryReserved` topic, and the topics Payment *owns*
+    (`PaymentCompleted`, `PaymentFailed`); also adds Order Service's
+    subscriptions to these two new topics (in
     `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
     image and deploys Payment Service; per task 6, Order Service's
     `terraform apply` job in this PR's workflow run declares `needs:` on
-    Payment Service's `terraform apply` job. CI/CD job also runs EF Core
-    migrations against Payment's DB before its Container App revision goes
-    live (same pattern as task 10).
+    Payment Service's `terraform apply` job. CI/CD job also runs the
+    migration Container Apps Job against Payment's DB before its Container
+    App revision goes live (same in-Azure pattern as task 10).
     - *Verify:* `docker build -f services/payment-service/Dockerfile .`
       succeeds locally; `terraform plan` clean; CI builds, pushes, migrates
       the DB schema, and deploys; end-to-end through Payment reaches
@@ -491,8 +634,11 @@ before starting Phase 2.
     then `OrderDelivered` (simulated delay, no carrier integration).
 19. **Fulfillment Service Dockerfile, Terraform + deploy** —
     `services/fulfillment-service/Dockerfile` (same pattern);
-    `services/fulfillment-service/infra/terraform/`: Container App (image
-    from the shared ACR's `fulfillment-service` repository; `min_replicas =
+    `services/fulfillment-service/infra/terraform/`: own managed identity
+    granted `Azure Service Bus Data Owner` on the namespace (no SQL AAD-user
+    step needed — no DB); Container App (image from the shared ACR's
+    `fulfillment-service` repository, both the shared ACR-pull identity and
+    this service's own identity attached; `min_replicas =
     1`, same reason as Inventory/Payment; no DB — Fulfillment owns no
     tables per the spec's Data Model), Fulfillment's
     subscription to Order's `OrderConfirmed` topic (created in Phase 1,
