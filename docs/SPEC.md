@@ -23,12 +23,14 @@ system.
 - Locking strategies (pessimistic/optimistic concurrency control)
 - TTL-based/expiring reservations
 - Back-of-envelope capacity estimation, scalability/availability targets
+- **Order cancellation** (customer-initiated cancellation of an already
+  `RESERVED`/`CONFIRMED` order) — deferred; see note under Functional
+  Requirements
 
 **Success looks like:** a customer can place an order, the system reserves
 inventory and processes payment via independent services reacting to events
-(no central orchestrator), the order reaches a terminal state consistent
-with what actually happened to inventory and payment, and the order can be
-cancelled pre-shipment with inventory released and payment refunded.
+(no central orchestrator), and the order reaches a terminal state consistent
+with what actually happened to inventory and payment.
 
 ## Non-Functional Requirements
 
@@ -60,12 +62,16 @@ Everything else (latency, throughput, uptime %) is out of scope.
    the order is confirmed and handed to fulfillment.
 5. **Track order status** — customer can query current order status at any
    time.
-6. **Cancel order** — customer can cancel an order before it ships;
-   reserved inventory is released and any completed payment is refunded.
-7. **Handle failures gracefully** — if inventory can't be reserved, or
+6. **Handle failures gracefully** — if inventory can't be reserved, or
    payment fails, the order is automatically moved to `CANCELLED` and any
    partial work (e.g. a reservation made before a later failure) is undone
    via a compensating event.
+
+> **Out of scope for now:** customer-initiated order cancellation
+> (cancelling an already `RESERVED`/`CONFIRMED` order). The state machine
+> still allows the article's failure-driven transitions to `CANCELLED`
+> (out of stock, payment failure) since those are part of the core
+> placement flow, not a separate cancellation feature.
 
 ## High-Level Design
 
@@ -89,16 +95,20 @@ Everything else (latency, throughput, uptime %) is out of scope.
 ```
 
 - **Order Service** — owns order records and the order state machine. Sole
-  entry point for the customer (create, get, cancel). Publishes
-  `OrderCreated` and `OrderCancelled`; consumes `InventoryReserved`,
-  `InventoryFailed`, `PaymentCompleted`, `PaymentFailed`,
-  `InventoryReleased`, `PaymentRefunded` to advance/roll back order state.
+  entry point for the customer (create, get — no cancel endpoint for now).
+  Publishes `OrderCreated` and `OrderCancelled` (the latter only as a
+  failure-compensation trigger, not customer-initiated); consumes
+  `InventoryReserved`, `InventoryFailed`, `PaymentCompleted`,
+  `PaymentFailed`, `InventoryReleased`, `PaymentRefunded` to advance/roll
+  back order state.
 - **Inventory Service** — owns stock levels. Consumes `OrderCreated`
-  (reserve) and `OrderCancelled` (release). Publishes `InventoryReserved`,
-  `InventoryFailed`, `InventoryReleased`.
+  (reserve) and `OrderCancelled` (release, on payment failure). Publishes
+  `InventoryReserved`, `InventoryFailed`, `InventoryReleased`.
 - **Payment Service** — owns payment/charge records. Consumes
-  `InventoryReserved` (charge) and `OrderCancelled` (refund, if a charge
-  exists). Publishes `PaymentCompleted`, `PaymentFailed`, `PaymentRefunded`.
+  `InventoryReserved` (charge). Publishes `PaymentCompleted`,
+  `PaymentFailed`. (`PaymentRefunded` is defined for future use but has no
+  producer path while cancellation is out of scope — a completed payment
+  is never refunded in the current MVP flow.)
 - **Fulfillment Service** — consumes `OrderConfirmed` to begin shipping.
   Publishes `OrderShipped`, `OrderDelivered` (simulated — no real carrier).
 
@@ -152,25 +162,17 @@ coordinator or distributed transaction.
   `CANCELLED` — the order's terminal state doesn't wait on the
   compensation to complete, only the underlying inventory/payment records
   do.
-- On a customer-initiated cancellation (see below), the same
-  `OrderCancelled` event drives both inventory release and payment refund
-  in parallel — each service only acts if it actually holds relevant state
-  for that order (Inventory Service no-ops if no reservation exists;
-  Payment Service no-ops/refunds only if a completed charge exists).
+- Note: `PaymentFailed` can only occur after inventory was successfully
+  reserved (payment is only attempted once `InventoryReserved` fires), so
+  the compensation on this path is always inventory release only — there
+  is never a completed payment to refund at this point.
 
-## Order Cancellation Flow
-
-1. Customer calls Order Service to cancel an order that is `RESERVED` or
-   `CONFIRMED` (not yet `SHIPPED`/`DELIVERED`).
-2. Order Service moves the order directly to `CANCELLED` and publishes
-   `OrderCancelled { orderId }`.
-3. Inventory Service consumes `OrderCancelled`: if a reservation exists for
-   this order, release it and publish `InventoryReleased`; otherwise no-op.
-4. Payment Service consumes `OrderCancelled`: if a completed charge exists
-   for this order, refund it and publish `PaymentRefunded`; otherwise
-   no-op.
-5. Order Service consumes `InventoryReleased` / `PaymentRefunded` only to
-   update the audit trail — the order is already `CANCELLED` from step 2.
+> **Order Cancellation Flow — out of scope for now.** Customer-initiated
+> cancellation of a `RESERVED`/`CONFIRMED` order (and the resulting
+> payment refund) is deferred; see the note under Functional Requirements.
+> When it's added later, it will reuse `OrderCancelled` /
+> `InventoryReleased` / `PaymentRefunded` the same way the failure path
+> does.
 
 ## Order State Machine
 
@@ -191,27 +193,23 @@ post-delivery return path from `DELIVERED`.
 | `CREATED` | `InventoryFailed` | `CANCELLED` |
 | `RESERVED` | `PaymentCompleted` | `CONFIRMED` |
 | `RESERVED` | `PaymentFailed` | `CANCELLED` |
-| `RESERVED` | customer cancels | `CANCELLED` |
 | `CONFIRMED` | fulfillment ships order | `SHIPPED` |
-| `CONFIRMED` | customer cancels | `CANCELLED` |
 | `SHIPPED` | fulfillment delivers order | `DELIVERED` |
 | `DELIVERED` | customer requests return (post-MVP) | `REFUND_PENDING` |
 | `REFUND_PENDING` | refund processed (post-MVP) | `REFUNDED` |
 
 Notes:
-- `CANCELLED` is reached directly from `CREATED`, `RESERVED`, or
-  `CONFIRMED` — there is no separate transient "cancelling" state.
-  Compensating actions (inventory release, payment refund) are triggered
-  by the same `OrderCancelled` event but don't gate the order's own status;
-  they update the inventory/payment records independently and are recorded
-  in the order-events audit trail as they complete.
-- `SHIPPED` and `DELIVERED` are terminal for cancellation purposes — once
-  `SHIPPED`, cancellation is no longer allowed in this MVP.
+- `CANCELLED` is only reachable from `CREATED` (inventory unavailable) or
+  `RESERVED` (payment failed) in the current MVP — both are failure paths
+  within the placement flow, not customer-initiated cancellation.
+  Customer-initiated cancellation (from `RESERVED` or `CONFIRMED`) is out
+  of scope for now; see Functional Requirements.
+- `SHIPPED` and `DELIVERED` are terminal for cancellation purposes.
 - The `DELIVERED → REFUND_PENDING → REFUNDED` path exists in the state
   machine per the source article but the return/refund flow itself is out
   of scope for this MVP (no functional requirement covers it yet).
 - Every transition is caused by exactly one consumed event (or the direct
-  customer action that creates/cancels the order) and is persisted as an
+  customer action that creates the order) and is persisted as an
   append-only order-events record for audit purposes.
 
 ```
@@ -222,35 +220,36 @@ Notes:
                  │        └──────────────┐
                  ▼                       ▼
            ┌───────────┐        ┌───────────────┐
-           │ CANCELLED │◀───┐   │   RESERVED    │
-           └───────────┘    │   └───────┬───────┘
-                 ▲           │   PaymentCompleted │ PaymentFailed / cancel
-                 │           │           ▼         └───────┐
-                 │           │    ┌────────────┐           │
-                 │           │    │ CONFIRMED  │           │
-                 │           │    └─────┬──────┘           │
-                 │           │   ships  │  cancel           │
-                 │           │         ▼    └────────────────┤
-                 │           │  ┌────────────┐               │
-                 │           │  │  SHIPPED   │               │
-                 │           │  └─────┬──────┘               │
-                 │           │  delivers                      │
-                 │           │        ▼                       │
-                 │           │  ┌────────────┐                │
-                 │           │  │ DELIVERED  │                │
-                 │           │  └─────┬──────┘                │
-                 │           │        │ return (post-MVP)     │
-                 │           │        ▼                       │
-                 │           │  ┌────────────────┐            │
-                 │           │  │ REFUND_PENDING │            │
-                 │           │  └───────┬────────┘            │
-                 │           │          ▼                     │
-                 │           │  ┌────────────┐                │
-                 │           │  │  REFUNDED  │                │
-                 │           │  └────────────┘                │
-                 │           └───────────────────────────────-┘
-                 └─────────────── (cancel from RESERVED/CONFIRMED)
+           │ CANCELLED │◀───────│   RESERVED    │
+           └───────────┘  PaymentFailed └───┬───┘
+                                   PaymentCompleted
+                                             ▼
+                                      ┌────────────┐
+                                      │ CONFIRMED  │
+                                      └─────┬──────┘
+                                        ships │
+                                             ▼
+                                      ┌────────────┐
+                                      │  SHIPPED   │
+                                      └─────┬──────┘
+                                     delivers │
+                                             ▼
+                                      ┌────────────┐
+                                      │ DELIVERED  │
+                                      └─────┬──────┘
+                                  return (post-MVP) │
+                                             ▼
+                                    ┌────────────────┐
+                                    │ REFUND_PENDING │
+                                    └───────┬────────┘
+                                            ▼
+                                     ┌────────────┐
+                                     │  REFUNDED  │
+                                     └────────────┘
 ```
+
+(No arrow from `RESERVED`/`CONFIRMED` back to `CANCELLED` via customer
+cancellation — that transition is out of scope for now.)
 
 ## Events
 
@@ -270,11 +269,14 @@ Notes:
 
 `OrderCreated`, `InventoryReserved`, `InventoryFailed`, `PaymentCompleted`,
 `PaymentFailed`, and `OrderConfirmed` are the events named in the source
-article. `OrderCancelled`, `InventoryReleased`, `PaymentRefunded`,
-`OrderShipped`, and `OrderDelivered` are added here because the article
-references compensation and fulfillment ("release inventory, refund
-payment", "Fulfillment Service picks up confirmed order for shipping")
-without naming their events explicitly.
+article. `OrderCancelled`, `InventoryReleased`, `OrderShipped`, and
+`OrderDelivered` are added here because the article references
+compensation and fulfillment ("release inventory, refund payment",
+"Fulfillment Service picks up confirmed order for shipping") without
+naming their events explicitly. `PaymentRefunded` is defined for
+completeness but is currently unused — no flow in this MVP produces it,
+since customer-initiated cancellation (the only source of refunds on a
+completed payment) is out of scope for now.
 
 Events are partitioned/routed by `orderId` so that all events for a given
 order are processed in order by each consumer.
@@ -287,30 +289,29 @@ order are processed in order by each consumer.
   defined in the source article (no invented states).
 - **Ask first:** introducing an orchestrator/saga coordinator, adding
   locking or TTL-based reservation semantics, adding services beyond the
-  four listed, choosing a concrete tech stack/message bus.
+  four listed, choosing a concrete tech stack/message bus, adding
+  customer-initiated order cancellation.
 - **Never do:** mark an order `CONFIRMED` without a corresponding
   successful payment event; decrement inventory outside of the
   `OrderCreated`-triggered reservation step.
 
 ## Success Criteria
 
-- All six functional requirements above are satisfiable by the design.
+- All functional requirements above are satisfiable by the design.
 - Placing an order with sufficient stock and a successful charge reaches
   `CONFIRMED`.
 - Placing an order with insufficient stock reaches `CANCELLED` without any
   payment attempt.
 - Placing an order with sufficient stock but a failed charge reaches
   `CANCELLED` with inventory released.
-- Cancelling a `RESERVED` or `CONFIRMED` (unshipped) order reaches
-  `CANCELLED` with inventory released and payment refunded (if a charge
-  had been made).
 - Re-delivering any event to its consumer does not change the end state
   (idempotency holds).
 
 ## Open Questions
 
-- Should partial-item cancellation/refunds be supported later, or is
-  cancellation always whole-order? (Assumed whole-order for MVP.)
+- When customer-initiated order cancellation is brought into scope: should
+  partial-item cancellation/refunds be supported, or is cancellation
+  always whole-order?
 - What identifies a "payment method" at the API boundary — out of scope
   for a tech-agnostic spec, to be decided at implementation time.
 - The `DELIVERED → REFUND_PENDING → REFUNDED` return flow is named in the
