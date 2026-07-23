@@ -48,3 +48,13 @@ in this plan (refunds/cancellation out of scope per spec).
 Cart, Notification, Analytics, Search services; saga orchestration; locking/
 TTL reservation semantics; customer-initiated cancellation; refunds;
 auth/authz; transport-level retry/DLQ handling.
+
+## Known limitation accepted for MVP simplicity: no transactional outbox
+Each service's write path (DB commit, then publish the resulting event) is
+not atomic — there is no outbox table, CDC, or two-phase mechanism coupling
+the two. If a service commits its state change and then crashes/fails before
+the publish call succeeds, the event is never emitted and the order can be
+left stuck (e.g. stock decremented but no `InventoryReserved`/`InventoryFailed`
+ever published, so Order Service never leaves `CREATED`). This is a known
+correctness gap, deliberately deferred to keep Phase 0's messaging
+abstraction simple; revisit if this moves beyond MVP.
