@@ -1,6 +1,6 @@
 # Spec: E-Commerce Order System (MVP)
 
-**Source:** design and terminology (states, events, choreography flow)
+**Source:** design and terminology (states, events, event flow)
 are adapted from
 [Designing an E-Commerce Order System](https://sadamkhan.spiralsync.com/blog/system-design/design-ecommerce-order-system).
 
@@ -27,6 +27,11 @@ system.
 - Locking strategies (pessimistic/optimistic concurrency control)
 - TTL-based/expiring reservations
 - Back-of-envelope capacity estimation, scalability/availability targets
+- Authentication/authorization (no login, tokens, or identity verification;
+  `UserId` is assumed to be supplied by the caller as-is)
+- Transport-level failure handling (broker redelivery/retry policy, dead-
+  lettering, poison-message handling) — only business-level failures (out
+  of stock, payment decline) are addressed by this spec
 - **Order cancellation** (customer-initiated cancellation of an already
   `RESERVED`/`CONFIRMED` order) — deferred; see note under Functional
   Requirements
@@ -61,6 +66,11 @@ Everything else (latency, throughput, uptime %) is out of scope.
 1. **Place order** — customer submits an order (items + quantities,
    shipping address, payment method reference). System creates the order
    and begins the fulfillment pipeline.
+
+   > **Known limitation:** there is no catalog/pricing service in scope.
+   > `UnitPrice`/`TotalAmount` (see Data Model) are taken as submitted by
+   > the client with the order request, unvalidated against any
+   > independent price source. This is a known gap, accepted for this MVP.
 2. **Reserve inventory** — system checks and reserves stock for every item
    in the order as an all-or-nothing operation.
 3. **Process payment** — system charges the customer for the order once
@@ -91,7 +101,7 @@ Everything else (latency, throughput, uptime %) is out of scope.
                           ▼
                   ┌───────────────┐
                   │   Event Bus    │   (topic per event type,
-                  │ (choreography) │    partitioned by order_id)
+                  │                │    partitioned by order_id)
                   └───────┬───────┘
               ┌───────────┼───────────────┐
               ▼           ▼               ▼
@@ -268,7 +278,7 @@ cancellation — that transition is out of scope for now.)
 | `PaymentCompleted` | Payment Service | Order Service | `orderId, paymentId` |
 | `PaymentFailed` | Payment Service | Order Service | `orderId, reason` |
 | `OrderConfirmed` | Order Service | Fulfillment Service | `orderId` |
-| `OrderCancelled` | Order Service | Inventory Service, Payment Service | `orderId, reason` |
+| `OrderCancelled` | Order Service | Inventory Service | `orderId, reason` |
 | `InventoryReleased` | Inventory Service | Order Service | `orderId` |
 | `PaymentRefunded` | Payment Service | Order Service | `orderId, paymentId` |
 | `OrderShipped` | Fulfillment Service | Order Service | `orderId` |
@@ -284,6 +294,18 @@ naming their events explicitly. `PaymentRefunded` is defined for
 completeness but is currently unused — no flow in this MVP produces it,
 since customer-initiated cancellation (the only source of refunds on a
 completed payment) is out of scope for now.
+
+**`reason` values** (the three events above that carry a `reason` field use
+a fixed vocabulary, not free text):
+- `InventoryFailed.reason`: `OutOfStock` — the only cause this spec
+  defines (insufficient stock on one or more items).
+- `OrderCancelled.reason`: `PaymentFailed` — the only cause this spec
+  defines; per Order Placement Flow step 6, `OrderCancelled` is only
+  published in this MVP as a result of a failed payment.
+- `PaymentFailed.reason`: not decomposed into a fixed set of sub-reasons
+  by this spec (e.g. distinguishing a card decline from a gateway error)
+  — treated as an opaque diagnostic string, since no functional
+  requirement branches on it.
 
 Events are partitioned/routed by `orderId` so that all events for a given
 order are processed in order by each consumer.
@@ -307,12 +329,12 @@ order are processed in order by each consumer.
   4 services) and over Azure Functions (Order Service is both an HTTP API
   and a Service Bus consumer in one logical service — Functions would
   force splitting that across trigger types/apps for no benefit).
-- Event bus (choreography): Azure Service Bus topics/subscriptions — one
-  topic per event type in the Events table below, with `orderId` used as
-  the Service Bus session id so per-order events stay ordered per
-  consumer, matching the "partitioned by orderId" requirement above.
-  Chosen over Event Grid (no strong ordering guarantees) and Event Hubs
-  (built for high-throughput streaming, not transactional choreography).
+- Event bus: Azure Service Bus topics/subscriptions — one topic per event
+  type in the Events table below, with `orderId` used as the Service Bus
+  session id so per-order events stay ordered per consumer, matching the
+  "partitioned by orderId" requirement above. Chosen over Event Grid (no
+  strong ordering guarantees) and Event Hubs (built for high-throughput
+  streaming, not this event flow's transactional needs).
 - Per-service state: Azure SQL Database, **Serverless tier**, one
   database per service, not shared — matching "each service owns exactly
   one piece of state." Serverless tier auto-pauses when idle, keeping
@@ -355,7 +377,6 @@ service's own Azure SQL database, not a shared one.
 | UserId | Guid | Customer reference |
 | Status | OrderStatus | `Created / Reserved / Confirmed / Shipped / Delivered / Cancelled` (`RefundPending` / `Refunded` also exist per the source article's state machine but are unused — refunds are out of scope for this MVP) |
 | TotalAmount | decimal | Order value |
-| Currency | string(3) | ISO 4217 currency code |
 | ShippingAddress | string (JSON) | Delivery location — shape not specified by the source article |
 | PaymentMethod | string | Payment identifier |
 | CreatedAt | DateTimeOffset | Creation timestamp |
@@ -393,7 +414,6 @@ service's own Azure SQL database, not a shared one.
 | ProductId | string | Primary key (SKU) |
 | Available | int | Purchasable quantity |
 | Reserved | int | Quantity held by pending orders |
-| WarehouseId | string | Physical storage location |
 | Version | int | Optimistic-lock counter per the source article — locking is out of scope for this MVP, so this column is unused |
 | UpdatedAt | DateTimeOffset | Last modification time |
 
@@ -407,7 +427,6 @@ service's own Azure SQL database, not a shared one.
 | OrderId | Guid | Foreign key to `Orders` |
 | IdempotencyKey | string | Duplicate-charge prevention identifier |
 | Amount | decimal | Charged value |
-| Currency | string(3) | ISO 4217 currency code |
 | Status | PaymentStatus | `Pending / Completed / Failed` (`Refunded` also exists per the source article but is unused — refunds are out of scope for this MVP) |
 | ProviderId | string | External payment gateway reference |
 | CreatedAt | DateTimeOffset | Initiation time |
