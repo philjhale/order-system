@@ -53,9 +53,16 @@ Consistency is the only NFR this spec addresses:
 2. **No uncharged confirmation / no chargeless loss** — an order is never
    marked `CONFIRMED` unless payment actually succeeded; a customer is
    never charged for an order that doesn't end up `CONFIRMED`.
-3. **Idempotent event handling** — every service assumes at-least-once
-   event delivery and must produce the same end state no matter how many
-   times a given event is (re)delivered.
+3. **Idempotent and order-tolerant event handling** — every service assumes
+   at-least-once event delivery and must produce the same end state no
+   matter how many times a given event is (re)delivered. Separately, since
+   each event type is produced by an independent service reacting to its
+   own upstream event, a consumer may receive an event before the event(s)
+   establishing its logical precondition have been processed locally
+   (ordering is only guaranteed within a single event type's stream to a
+   single consumer, not across event types — see Events). A consumer must
+   treat such an early arrival as "not yet processable" and defer/retry it,
+   not as invalid or duplicate.
 4. **Auditable state** — every order state transition is caused by exactly
    one event, and that event is durably recorded.
 
@@ -141,6 +148,14 @@ before acting on an event it checks whether it has already processed that
 event/order transition (e.g. by event id or by current entity state) and
 no-ops if so. This makes at-least-once delivery safe without a saga
 coordinator or distributed transaction.
+
+> **Known limitation:** the state mutation and the outcome publish above
+> are not atomic with each other (no transactional outbox or equivalent
+> two-phase mechanism). If a service commits its state change and then
+> fails before the publish succeeds, the event is never emitted and the
+> order can be left stuck in an intermediate state with no path forward.
+> Accepted as a known gap for this MVP to keep the messaging design simple;
+> would need an outbox pattern (or equivalent) to close.
 
 ## Order Placement Flow
 
@@ -308,8 +323,12 @@ a fixed vocabulary, not free text):
   — treated as an opaque diagnostic string, since no functional
   requirement branches on it.
 
-Events are partitioned/routed by `orderId` so that all events for a given
-order are processed in order by each consumer.
+Events are partitioned/routed by `orderId` so that, for a given order,
+events of the *same type* are delivered to a given consumer in the order
+they were published. This does not extend across different event types:
+two events produced by independent services (e.g. `InventoryReserved` and a
+downstream `PaymentCompleted`) carry no ordering guarantee relative to each
+other, since each is a separate stream. See NFR 3.
 
 ## Tech Stack
 
