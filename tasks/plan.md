@@ -231,10 +231,15 @@ state before the next phase starts.
    only authenticate one branch's runs and break CI on every other phase's
    PR — this plan's delivery strategy runs six phase branches through PR
    CI, so both subjects are required, not optional. Grant the app
-   `Contributor` on the resource group, and store its client/tenant/
-   subscription IDs as GitHub repo secrets/vars — every job below depends
-   on this identity existing, so it's a prerequisite step of this task, not
-   a separate one. Then: reusable
+   `Contributor` at the *subscription* scope, not resource-group scope —
+   task 5's Terraform is what creates the resource group, so a role
+   assignment scoped to that group can't exist before task 5's first
+   `apply` runs, and that first `apply` is itself a CI job using this same
+   identity. Subscription-scope avoids the chicken-and-egg: the identity
+   can create the resource group itself in task 5's first CI run. Store its
+   client/tenant/subscription IDs as GitHub repo secrets/vars — every job
+   below depends on this identity existing, so it's a prerequisite step of
+   this task, not a separate one. Then: reusable
    GitHub Actions workflow (`azure/login` using that OIDC credential, build
    + test on PR, `docker build`/`docker push` to the shared ACR, `terraform
    plan`/`apply` job), plus the `terraform plan`/`apply` job for `shared/`
@@ -258,9 +263,15 @@ state before the next phase starts.
 7. **Order domain + persistence** — `Orders`/`OrderItems`/`OrderEvents`
    tables (EF Core, Azure SQL), order state machine enforcing only the
    transitions in the spec's state table, append-only `OrderEvents` write
-   on every transition.
+   on every transition. `DbContext` is configured with
+   `EnableRetryOnFailure()` — Azure SQL Serverless auto-pauses when idle
+   (used across all three service DBs to keep MVP cost down), and the
+   first connection after a resume can take several seconds and needs to
+   survive a transient connection failure rather than crash the consumer.
    - *Verify:* unit tests cover every legal transition and reject illegal
-     ones (e.g. `CREATED → CONFIRMED` directly).
+     ones (e.g. `CREATED → CONFIRMED` directly); a call against a
+     freshly-resumed (simulated transient-failure) connection succeeds via
+     the retry policy rather than throwing.
 8. **Order Service HTTP API** — `POST /orders` (create, state `CREATED`,
    publish `OrderCreated`), `GET /orders/{id}` (status query).
    - *Verify:* integration test hitting the API against a test DB and
@@ -309,8 +320,12 @@ state before the next phase starts.
     (`OrderCreated`, `OrderCancelled`, `OrderConfirmed`); CI/CD job builds
     the image, pushes to ACR tagged with the commit SHA, runs EF Core
     migrations against the SQL DB (dedicated CI/CD job step, before the new
-    Container App revision goes live), then deploys the Container App
-    pinned to that tag.
+    Container App revision goes live) wrapped in a short retry/wait loop —
+    a one-shot `dotnet ef database update` isn't covered by the
+    application-level `EnableRetryOnFailure()` from task 7, and can hit a
+    freshly-idle Serverless DB's resume window — then deploys the Container
+    App pinned to that tag. Every subsequent service's migration step
+    (tasks 14, 17) follows this same retry-wrapped pattern.
     - *Verify:* `docker build -f services/order-service/Dockerfile .` (run
       from repo root) succeeds locally; `terraform plan` clean inside
       `services/order-service/infra/terraform/`; CI workflow builds,
@@ -326,7 +341,8 @@ before starting Phase 2.
 11. **Inventory domain + persistence** — `InventoryItems` table and the
     `InventoryReservations` table (per-order/per-product record of what was
     reserved — the source of truth for both idempotency-checking and for
-    exactly what to restore on release; see Data Model).
+    exactly what to restore on release; see Data Model). `DbContext` uses
+    `EnableRetryOnFailure()` (same reason as task 7 — Serverless auto-pause).
 12. **Reserve on `OrderCreated`** — for each item, an atomic conditional
     update (`UPDATE InventoryItems SET Available = Available - @qty WHERE
     ProductId = @p AND Available >= @qty`, single DB transaction) so two
@@ -357,7 +373,10 @@ before starting Phase 2.
     `services/inventory-service/Dockerfile` (same repo-root-build-context
     pattern as Order Service's); `services/inventory-service/infra/terraform/`:
     Container App (image from the shared ACR's `inventory-service`
-    repository), Azure SQL Serverless DB, Inventory's subscriptions to
+    repository; `min_replicas = 1` — Inventory has no HTTP traffic to
+    trigger the default scale-from-zero, so without a nonzero floor a
+    consumer with 0 replicas never picks up messages published to its
+    subscriptions), Azure SQL Serverless DB, Inventory's subscriptions to
     Order's `OrderCreated` and `OrderCancelled` topics (which now exist as
     of Phase 1), and the topics Inventory *owns* (`InventoryReserved`,
     `InventoryFailed`, `InventoryReleased`); also adds Order Service's
@@ -380,7 +399,8 @@ before starting Phase 2.
 ### Phase 3 — Payment Service
 15. **Payment domain + persistence** — `Payments` table (`OrderId` stored as
     a plain column, not a DB-level FK — `Orders` lives in a different
-    service's database; see Data Model).
+    service's database; see Data Model). `DbContext` uses
+    `EnableRetryOnFailure()` (same reason as task 7 — Serverless auto-pause).
 16. **Charge on `InventoryReserved`** — simulated payment gateway call for
     `totalAmount` against `paymentMethod` (both read directly from the
     consumed event's payload, not queried from any other service's DB),
@@ -392,8 +412,10 @@ before starting Phase 2.
 17. **Payment Service Dockerfile, Terraform + deploy** —
     `services/payment-service/Dockerfile` (same pattern);
     `services/payment-service/infra/terraform/`: Container App (image from
-    the shared ACR's `payment-service` repository), Azure SQL Serverless
-    DB, Payment's subscription to Inventory's `InventoryReserved` topic,
+    the shared ACR's `payment-service` repository; `min_replicas = 1`, same
+    reason as Inventory's — no HTTP traffic to scale from zero on), Azure
+    SQL Serverless DB, Payment's subscription to Inventory's
+    `InventoryReserved` topic,
     and the topics Payment *owns* (`PaymentCompleted`, `PaymentFailed`);
     also adds Order Service's subscriptions to these two new topics (in
     `services/order-service/infra/terraform/`). CI/CD job builds/pushes the
@@ -413,8 +435,9 @@ before starting Phase 2.
 19. **Fulfillment Service Dockerfile, Terraform + deploy** —
     `services/fulfillment-service/Dockerfile` (same pattern);
     `services/fulfillment-service/infra/terraform/`: Container App (image
-    from the shared ACR's `fulfillment-service` repository; no DB —
-    Fulfillment owns no tables per the spec's Data Model), Fulfillment's
+    from the shared ACR's `fulfillment-service` repository; `min_replicas =
+    1`, same reason as Inventory/Payment; no DB — Fulfillment owns no
+    tables per the spec's Data Model), Fulfillment's
     subscription to Order's `OrderConfirmed` topic (created in Phase 1,
     finally subscribed to here), and the topics Fulfillment *owns*
     (`OrderShipped`, `OrderDelivered`); also adds Order Service's
