@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-OrderSystem.FulfillmentService-e0e7229b-7a17-4d72-9fc3-a1ef0d4aa271</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\shared\OrderSystem.Contracts\OrderSystem.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\..\shared\OrderSystem.Messaging\OrderSystem.Messaging.csproj" />
+  </ItemGroup>
+</Project>
