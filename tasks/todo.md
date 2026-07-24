@@ -4,9 +4,19 @@ Each numbered task = its own branch off `main` + its own PR (phases are
 grouping labels and checkpoints, not PR boundaries). See `tasks/plan.md`
 "Delivery / branching strategy" for details.
 
+**Generation time tracking:** `/agent-skills:build` for each task is
+followed by `/agent-skills:review`, with any Critical findings fixed
+before the task is marked done. Each completed task below records the
+*total* wall-clock time for that whole cycle — build, review, and
+critical-finding fixes together, start to finish. Recorded live
+(start/end noted during the session), starting from task 2; task 1
+predates this convention and is marked "not tracked."
+
+**Total generation time so far:** not tracked (task 1 only)
+
 ## Phase 0 — Shared foundation
-- [x] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons, each with its own `tests/` project + a `shared/OrderSystem.Shared.sln` so they build/test standalone; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props)
-- [x] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)
+- [x] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons, each with its own `tests/` project + a `shared/OrderSystem.Shared.sln` so they build/test standalone; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props) — generation time: not tracked
+- [x] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)  — generation time: not tracked
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls; MaxDeliveryCount=10 + scheduled-redelivery delay so a short cross-topic race isn't dead-lettered)
 - [ ] 4. Azure account configuration (confirm/select subscription, register required resource providers: Microsoft.App/ServiceBus/Sql/ContainerRegistry/Storage) + Terraform remote state bootstrap (storage account + container, local state, one-time manual apply). Also do task 6's app-registration + OIDC-credential bootstrap here, ahead of task-number order — task 5's AAD group membership needs its object id.
 - [ ] 5. Terraform shared foundation (resource group, Container Apps environment, Service Bus namespace at Standard SKU (mandatory — Basic has no topics/subscriptions or sessions), shared user-assigned identity for ACR pulls (granted AcrPull on the registry, attached per-Container-App in later tasks — ACR auth is per-app, not environment-wide), shared Azure Container Registry, AAD group as SQL AAD-admin (CI app registration added as a member) — passwordless data-plane auth for Service Bus + SQL replaces Key Vault entirely, so no Key Vault is provisioned)
