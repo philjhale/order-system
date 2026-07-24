@@ -102,6 +102,22 @@ public class EventContractSerializationTests
         Assert.Equal(original, RoundTrip(original));
     }
 
+    [Fact]
+    public void InventoryFailed_SerializesReasonAsString_NotInt()
+    {
+        var json = JsonSerializer.Serialize(new InventoryFailed(Guid.NewGuid(), InventoryFailureReason.OutOfStock));
+
+        Assert.Contains("\"OutOfStock\"", json);
+    }
+
+    [Fact]
+    public void OrderCancelled_SerializesReasonAsString_NotInt()
+    {
+        var json = JsonSerializer.Serialize(new OrderCancelled(Guid.NewGuid(), OrderCancellationReason.PaymentFailed));
+
+        Assert.Contains("\"PaymentFailed\"", json);
+    }
+
     private static T RoundTrip<T>(T value)
     {
         var json = JsonSerializer.Serialize(value);
