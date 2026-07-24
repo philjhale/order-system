@@ -4,8 +4,17 @@ Each numbered task = its own branch off `main` + its own PR (phases are
 grouping labels and checkpoints, not PR boundaries). See `tasks/plan.md`
 "Delivery / branching strategy" for details.
 
+**Generation time tracking:** each completed task below records how long
+Claude spent *generating* the code — from starting the task's
+implementation to its pre-review implementation commit — not time spent
+on `/agent-skills:review` or fixing review findings afterward. Recorded
+live (start/end noted during the session), starting from task 2; task 1
+predates this convention and is marked "not tracked."
+
+**Total generation time so far:** not tracked (task 1 only)
+
 ## Phase 0 — Shared foundation
-- [x] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons, each with its own `tests/` project + a `shared/OrderSystem.Shared.sln` so they build/test standalone; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props)
+- [x] 1. Solution scaffolding (`shared/` Contracts+Messaging skeletons, each with its own `tests/` project + a `shared/OrderSystem.Shared.sln` so they build/test standalone; per-service `services/<name>/` folders each with own `.sln`, `src/`, `tests/`, referencing `shared/` by relative path; `integration-tests/` skeleton; root build props) — generation time: not tracked
 - [ ] 2. Event contracts (DTOs for all 11 events, OrderStatus/PaymentStatus enums)
 - [ ] 3. Messaging abstraction (IEventPublisher/IEventSubscriber w/ explicit abandon-for-redelivery outcome, Service Bus + in-memory impls; MaxDeliveryCount=10 + scheduled-redelivery delay so a short cross-topic race isn't dead-lettered)
 - [ ] 4. Azure account configuration (confirm/select subscription, register required resource providers: Microsoft.App/ServiceBus/Sql/ContainerRegistry/Storage) + Terraform remote state bootstrap (storage account + container, local state, one-time manual apply). Also do task 6's app-registration + OIDC-credential bootstrap here, ahead of task-number order — task 5's AAD group membership needs its object id.
