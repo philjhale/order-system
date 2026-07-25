@@ -1,3 +1,3 @@
 namespace OrderSystem.Contracts.Events;
 
-public sealed record PaymentCompleted(Guid OrderId, Guid PaymentId);
+public sealed record PaymentCompleted(Guid OrderId, Guid PaymentId) : IOrderScopedEvent;

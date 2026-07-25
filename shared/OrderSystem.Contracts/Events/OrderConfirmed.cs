@@ -1,3 +1,3 @@
 namespace OrderSystem.Contracts.Events;
 
-public sealed record OrderConfirmed(Guid OrderId);
+public sealed record OrderConfirmed(Guid OrderId) : IOrderScopedEvent;
