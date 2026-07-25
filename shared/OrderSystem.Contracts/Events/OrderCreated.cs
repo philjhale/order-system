@@ -4,4 +4,4 @@ public sealed record OrderCreated(
     Guid OrderId,
     IReadOnlyList<OrderItemPayload> Items,
     decimal TotalAmount,
-    string PaymentMethod);
+    string PaymentMethod) : IOrderScopedEvent;
