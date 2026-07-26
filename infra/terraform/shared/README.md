@@ -18,6 +18,12 @@
   Each service's own SQL server (tasks 10/14/17) names this group as its
   `azuread_administrator` — Azure SQL only accepts a user or group there,
   not a bare service principal.
+- The CI app registration's service principal is also granted `AcrPush` on
+  the shared registry directly (task 6) — separate from the `AcrPull`
+  grant above, which belongs to the *runtime* pull identity, not CI. This
+  lets the `docker-build-push` reusable workflow (`.github/workflows/`)
+  push each service's image from the GitHub-hosted runner, which
+  authenticates as the CI SP via OIDC.
 
 No Key Vault, no stored connection strings/secrets: Service Bus and SQL
 data-plane auth are both passwordless via managed identity, wired in each

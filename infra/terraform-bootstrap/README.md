@@ -71,19 +71,40 @@ az ad sp create --id <appId>
 az ad app federated-credential create --id <app-object-id> --parameters '{
   "name": "order-system-pr",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:philjhale/order-system:pull_request",
+  "subject": "repo:<owner>@<owner-id>/<repo>@<repo-id>:pull_request",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 az ad app federated-credential create --id <app-object-id> --parameters '{
   "name": "order-system-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:philjhale/order-system:ref:refs/heads/main",
+  "subject": "repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
 az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "Contributor" --scope "/subscriptions/<subscription-id>"
 az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "User Access Administrator" --scope "/subscriptions/<subscription-id>"
+
+# ARM roles above cover azurerm_* resources but not azuread_* ones (task
+# 5's sql_admins group/membership) — the azuread Terraform provider talks
+# to Microsoft Graph, which ARM RBAC doesn't reach. Without this, `terraform
+# plan`/`apply` against azuread_group/azuread_group_member fails with a
+# Graph 403 "Insufficient privileges". Tenant-wide (Graph app permissions
+# aren't scopable to one group), but low-stakes in a single-project tenant.
+az ad app permission add --id <app-object-id> \
+  --api 00000003-0000-0000-c000-000000000000 \
+  --api-permissions 62a82d76-70ea-41e2-9197-370581804d09=Role  # Group.ReadWrite.All
+az ad app permission admin-consent --id <app-object-id>
 ```
+
+**Federated credential subject format:** GitHub's OIDC `sub` claim uses
+`repo:<owner>@<owner-id>/<repo>@<repo-id>:...` (ID-qualified), not the
+plain `repo:<owner>/<repo>:...` form shown in most docs/examples — at
+least for this repo (confirmed live in task 6's first CI run, which
+failed OIDC token exchange with `AADSTS700213: No matching federated
+identity record` until the credentials were updated to match). Look up
+the owner/repo numeric IDs with `gh api repos/<owner>/<repo> --jq
+'{owner_id: .owner.id, repo_id: .id}'` before creating these credentials,
+and don't assume the plain form works without checking a real run.
 
 **Accepted risk:** the `pull_request` federated credential subject
 (`repo:philjhale/order-system:pull_request`) trusts *any* PR from this
