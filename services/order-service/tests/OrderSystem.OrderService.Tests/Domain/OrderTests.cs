@@ -11,12 +11,13 @@ public class OrderTests
         Guid.NewGuid(),
         Guid.NewGuid(),
         [new NewOrderItem("sku-1", 2, 10.00m), new NewOrderItem("sku-2", 1, 5.50m)],
+        totalAmount: 25.50m,
         shippingAddress: "{}",
         paymentMethod: "card",
         Now);
 
     [Fact]
-    public void Create_starts_in_Created_state_with_computed_total_and_an_audit_event()
+    public void Create_starts_in_Created_state_with_the_submitted_total_and_an_audit_event()
     {
         var order = CreateOrder();
 
@@ -34,7 +35,7 @@ public class OrderTests
     public void Create_rejects_an_order_with_no_items()
     {
         Assert.Throws<ArgumentException>(() => Order.Create(
-            Guid.NewGuid(), Guid.NewGuid(), [], "{}", "card", Now));
+            Guid.NewGuid(), Guid.NewGuid(), [], 0m, "{}", "card", Now));
     }
 
     [Fact]

@@ -22,10 +22,15 @@ public sealed class Order
 
     private Order() { } // EF Core
 
+    // TotalAmount is taken as submitted by the client with the order
+    // request, not derived from Items — there is no catalog/pricing service
+    // in scope to validate it against (docs/SPEC.md Functional Requirements
+    // "Place order" known limitation).
     public static Order Create(
         Guid orderId,
         Guid userId,
         IReadOnlyList<NewOrderItem> items,
+        decimal totalAmount,
         string shippingAddress,
         string paymentMethod,
         DateTimeOffset now)
@@ -40,6 +45,7 @@ public sealed class Order
             OrderId = orderId,
             UserId = userId,
             Status = OrderStatus.Created,
+            TotalAmount = totalAmount,
             ShippingAddress = shippingAddress,
             PaymentMethod = paymentMethod,
             CreatedAt = now,
@@ -50,8 +56,6 @@ public sealed class Order
         {
             order._items.Add(new OrderItem(orderId, item.ProductId, item.Quantity, item.UnitPrice));
         }
-
-        order.TotalAmount = order._items.Sum(i => i.Subtotal);
 
         order._orderEvents.Add(new OrderEvent(
             Guid.NewGuid(),
