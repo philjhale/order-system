@@ -1,6 +1,13 @@
 resource "azurerm_resource_group" "shared" {
   name     = "rg-order-system"
   location = var.location
+
+  # Every service's Terraform (tasks 10/14/17/19) depends on this
+  # resource group via terraform_remote_state — an accidental destroy
+  # here cascades to all four services at once.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_container_app_environment" "shared" {
@@ -34,6 +41,13 @@ resource "azurerm_servicebus_namespace" "shared" {
   # from each service's Container App / GitHub-hosted CI runners, none
   # with a stable IP.
   public_network_access_enabled = true
+
+  # Every service's Terraform (tasks 10/14/17/19) depends on this
+  # namespace via terraform_remote_state — an accidental destroy here
+  # cascades to all four services at once.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Shared across all 4 services' Container Apps (attached per-app, not
@@ -62,6 +76,13 @@ resource "azurerm_container_registry" "shared" {
   # push, none with a stable IP — same rationale as the Service Bus
   # namespace above.
   public_network_access_enabled = true
+
+  # Every service's Terraform (tasks 10/14/17/19) depends on this
+  # registry via terraform_remote_state — an accidental destroy here
+  # cascades to all four services at once.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_role_assignment" "acr_pull" {
@@ -81,5 +102,13 @@ data "azuread_service_principal" "ci" {
 resource "azuread_group" "sql_admins" {
   display_name     = "sql-admins-order-system"
   security_enabled = true
-  members          = [data.azuread_service_principal.ci.object_id]
+}
+
+# A separate, additive resource rather than the group's inline `members`
+# argument: `members` is authoritative and would silently revert any
+# membership added outside Terraform (e.g. a human break-glass admin
+# added via the portal) on the next apply.
+resource "azuread_group_member" "sql_admins_ci" {
+  group_object_id  = azuread_group.sql_admins.object_id
+  member_object_id = data.azuread_service_principal.ci.object_id
 }

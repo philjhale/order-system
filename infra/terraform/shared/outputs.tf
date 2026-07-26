@@ -41,3 +41,7 @@ output "acr_pull_identity_principal_id" {
 output "sql_admins_group_object_id" {
   value = azuread_group.sql_admins.object_id
 }
+
+output "sql_admins_group_display_name" {
+  value = azuread_group.sql_admins.display_name
+}
