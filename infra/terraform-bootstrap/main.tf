@@ -1,0 +1,53 @@
+terraform {
+  required_version = ">= 1.7"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+  }
+
+  # Local state deliberately: this config creates the remote-state backend
+  # that every other Terraform config in this repo uses, so it can't use
+  # that backend itself. Run once by hand (see README).
+}
+
+provider "azurerm" {
+  features {}
+}
+
+resource "azurerm_resource_group" "bootstrap" {
+  name     = "rg-order-system-bootstrap"
+  location = "uksouth"
+}
+
+resource "azurerm_storage_account" "tfstate" {
+  name                     = "stordersystemtfstate01"
+  resource_group_name      = azurerm_resource_group.bootstrap.name
+  location                 = azurerm_resource_group.bootstrap.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  min_tls_version          = "TLS1_2"
+
+  # Explicit, not relying on provider defaults: this account holds
+  # Terraform state (which can contain secrets from downstream configs),
+  # so it must never allow anonymous blob access even if a container's
+  # own access_type is later misconfigured.
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+
+  # No fixed IP range to allow-list: applied from developer machines and
+  # from GitHub-hosted CI runners, neither with a stable IP.
+  public_network_access_enabled = true
+
+  blob_properties {
+    versioning_enabled = true
+  }
+}
+
+resource "azurerm_storage_container" "tfstate" {
+  name                  = "tfstate"
+  storage_account_name  = azurerm_storage_account.tfstate.name
+  container_access_type = "private"
+}
