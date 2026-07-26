@@ -17,6 +17,11 @@ locals {
 
 # Dedicated to this service — separate from task 5's shared ACR-pull identity, since Service Bus
 # data-plane RBAC and the SQL contained-user grant are both per-service, not environment-wide.
+# Attached to both the always-running Container App and the migration job (below), so the
+# db_ddladmin role the migration job's contained-user grant includes (required for EF Core's
+# DDL migrations) is also held by the running app, not just the one-shot job — a least-privilege
+# gap accepted for MVP simplicity (one identity per service, not two) rather than an oversight;
+# revisit with a second, migration-only identity if this moves beyond MVP.
 resource "azurerm_user_assigned_identity" "order_service" {
   name                = "id-order-service"
   resource_group_name = local.resource_group_name
@@ -52,6 +57,10 @@ resource "azurerm_mssql_server" "order_service" {
   }
 }
 
+# Deliberately broad (any Azure-hosted resource, not just this service's own Container App or
+# migration job) rather than a private endpoint — an accepted MVP tradeoff, not an oversight,
+# since AAD-only auth is still required to actually connect. Same rationale as skipping Key
+# Vault: revisit if this moves beyond MVP.
 resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
   name             = "AllowAzureServices"
   server_id        = azurerm_mssql_server.order_service.id

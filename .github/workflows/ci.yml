@@ -161,17 +161,36 @@ jobs:
         run: |
           set -euo pipefail
           SQL_TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          echo "::add-mask::$SQL_TOKEN"
+
+          # `job start --env-vars` replaces the container's whole env list rather than merging
+          # into it, so every var the targeted apply above just set on the job template has to
+          # be resupplied here too, not just the token — otherwise the migration job runs with
+          # ConnectionStrings__OrderDb etc. missing and fails immediately.
+          SQL_SERVER_FQDN=$(terraform output -raw sql_server_fqdn)
+          IDENTITY_CLIENT_ID=$(terraform output -raw managed_identity_client_id)
+          CONNECTION_STRING="Server=tcp:${SQL_SERVER_FQDN},1433;Database=order-service;Authentication=Active Directory Managed Identity;User Id=${IDENTITY_CLIENT_ID};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+
           EXECUTION=$(az containerapp job start \
             --name caj-order-service-migrate \
             --resource-group rg-order-system \
-            --env-vars "Sql__CiAccessToken=$SQL_TOKEN" \
+            --env-vars \
+              "ConnectionStrings__OrderDb=$CONNECTION_STRING" \
+              "Sql__ServerFqdn=$SQL_SERVER_FQDN" \
+              "Sql__DatabaseName=order-service" \
+              "Sql__ManagedIdentityName=id-order-service" \
+              "Sql__CiAccessToken=$SQL_TOKEN" \
             --query name -o tsv)
+
           for attempt in $(seq 1 30); do
+            # A transient CLI/API error here (e.g. RBAC propagation delay right after the
+            # targeted apply) shouldn't abort the whole wait loop under `set -e` — only an
+            # actual Failed/timeout status should.
             STATUS=$(az containerapp job execution list \
               --name caj-order-service-migrate \
               --resource-group rg-order-system \
-              --query "[?name=='$EXECUTION'].properties.status | [0]" -o tsv)
-            echo "Migration job status: $STATUS"
+              --query "[?name=='$EXECUTION'].properties.status | [0]" -o tsv || echo "")
+            echo "Migration job status: ${STATUS:-<query failed, retrying>}"
             case "$STATUS" in
               Succeeded) exit 0 ;;
               Failed) exit 1 ;;

@@ -15,13 +15,16 @@ public sealed class SqlContainedUserProvisioner(IOptions<SqlMigrationOptions> op
     {
         var opts = options.Value;
 
+        // No `Authentication=` keyword here — it's mutually exclusive with setting AccessToken
+        // directly, and would throw at connection-open time if added later.
         await using var connection = new SqlConnection(
             $"Server=tcp:{opts.ServerFqdn},1433;Database={opts.DatabaseName};Encrypt=True;");
         connection.AccessToken = opts.CiAccessToken;
         await connection.OpenAsync(cancellationToken);
 
-        // CREATE USER can't take a parameterized identifier, so the (trusted, Terraform-supplied,
-        // not user input) identity name is bracket-escaped and interpolated instead.
+        // CREATE USER can't take a parameterized identifier, so the identity name — always
+        // azurerm_user_assigned_identity.order_service.name, a Terraform literal, never user
+        // input — is bracket-escaped and interpolated instead.
         var escapedName = opts.ManagedIdentityName.Replace("]", "]]");
 
         // ALTER ROLE ... ADD MEMBER is itself idempotent (no error if already a member), so only
