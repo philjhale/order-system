@@ -14,6 +14,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         modelBuilder.Entity<Order>(order =>
         {
             order.HasKey(o => o.OrderId);
+            order.Property(o => o.OrderId).ValueGeneratedNever();
             order.Property(o => o.TotalAmount).HasColumnType("decimal(18,2)");
 
             order.HasMany(o => o.Items)
@@ -42,6 +43,7 @@ public sealed class OrderDbContext(DbContextOptions<OrderDbContext> options) : D
         modelBuilder.Entity<OrderEvent>(orderEvent =>
         {
             orderEvent.HasKey(e => e.EventId);
+            orderEvent.Property(e => e.EventId).ValueGeneratedNever();
             orderEvent.HasIndex(e => e.OrderId);
         });
     }
