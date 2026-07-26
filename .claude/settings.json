@@ -9,6 +9,15 @@
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-stale-branch-edit.sh"
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-stale-main-read.sh"
+          }
+        ]
       }
     ]
   }
