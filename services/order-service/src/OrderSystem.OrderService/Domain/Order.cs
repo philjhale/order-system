@@ -60,7 +60,7 @@ public sealed class Order
         order._orderEvents.Add(new OrderEvent(
             Guid.NewGuid(),
             orderId,
-            eventType: "OrderCreated",
+            eventType: OrderEventType.OrderCreated,
             fromState: null,
             toState: OrderStatus.Created,
             eventData: JsonSerializer.Serialize(new { order.TotalAmount }),

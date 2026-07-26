@@ -26,7 +26,7 @@ public class OrderTests
         Assert.Equal(2, order.Items.Count);
 
         var orderEvent = Assert.Single(order.OrderEvents);
-        Assert.Equal("OrderCreated", orderEvent.EventType);
+        Assert.Equal(OrderEventType.OrderCreated, orderEvent.EventType);
         Assert.Null(orderEvent.FromState);
         Assert.Equal(OrderStatus.Created, orderEvent.ToState);
     }
@@ -44,14 +44,14 @@ public class OrderTests
         var order = CreateOrder();
         var transitionTime = Now.AddMinutes(5);
 
-        order.Transition(OrderStatus.Reserved, "InventoryReserved", "{}", transitionTime);
+        order.Transition(OrderStatus.Reserved, OrderEventType.InventoryReserved, "{}", transitionTime);
 
         Assert.Equal(OrderStatus.Reserved, order.Status);
         Assert.Equal(transitionTime, order.UpdatedAt);
 
         Assert.Equal(2, order.OrderEvents.Count);
         var latestEvent = order.OrderEvents[^1];
-        Assert.Equal("InventoryReserved", latestEvent.EventType);
+        Assert.Equal(OrderEventType.InventoryReserved, latestEvent.EventType);
         Assert.Equal(OrderStatus.Created, latestEvent.FromState);
         Assert.Equal(OrderStatus.Reserved, latestEvent.ToState);
     }
@@ -62,7 +62,7 @@ public class OrderTests
         var order = CreateOrder();
 
         var ex = Assert.Throws<InvalidOperationException>(
-            () => order.Transition(OrderStatus.Confirmed, "PaymentCompleted", "{}", Now.AddMinutes(5)));
+            () => order.Transition(OrderStatus.Confirmed, OrderEventType.PaymentCompleted, "{}", Now.AddMinutes(5)));
 
         Assert.Contains("Created", ex.Message);
         Assert.Contains("Confirmed", ex.Message);
