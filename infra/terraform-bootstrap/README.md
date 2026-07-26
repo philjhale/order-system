@@ -85,6 +85,17 @@ az role assignment create --assignee-object-id <sp-object-id> --assignee-princip
 az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "User Access Administrator" --scope "/subscriptions/<subscription-id>"
 ```
 
+**Accepted risk:** the `pull_request` federated credential subject
+(`repo:philjhale/order-system:pull_request`) trusts *any* PR from this
+repo, not just a specific branch — combined with `Contributor` +
+`User Access Administrator` at subscription scope on the same principal,
+a malicious or compromised PR that modifies `.github/workflows/**` could
+use these credentials to escalate IAM roles at subscription scope. This
+breadth is required by the plan (every task's PR needs `terraform plan`
+to authenticate, per `tasks/plan.md` task 6) and is an accepted tradeoff
+for this MVP, not an oversight. Mitigate by enabling branch protection
+requiring review on changes to `.github/workflows/**` before merge.
+
 No client secret is created — authentication is OIDC-only via the two
 federated credentials above. Task 6 stores the app (client) ID, tenant ID,
 and subscription ID as GitHub repo secrets/vars for use by

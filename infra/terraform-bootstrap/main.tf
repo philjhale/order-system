@@ -30,6 +30,17 @@ resource "azurerm_storage_account" "tfstate" {
   account_replication_type = "LRS"
   min_tls_version          = "TLS1_2"
 
+  # Explicit, not relying on provider defaults: this account holds
+  # Terraform state (which can contain secrets from downstream configs),
+  # so it must never allow anonymous blob access even if a container's
+  # own access_type is later misconfigured.
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+
+  # No fixed IP range to allow-list: applied from developer machines and
+  # from GitHub-hosted CI runners, neither with a stable IP.
+  public_network_access_enabled = true
+
   blob_properties {
     versioning_enabled = true
   }
