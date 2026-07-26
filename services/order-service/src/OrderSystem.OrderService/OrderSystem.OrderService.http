@@ -1,6 +1,21 @@
 @OrderSystem.OrderService_HostAddress = http://localhost:5023
 
-GET {{OrderSystem.OrderService_HostAddress}}/weatherforecast/
+POST {{OrderSystem.OrderService_HostAddress}}/orders
+Content-Type: application/json
+
+{
+  "userId": "11111111-1111-1111-1111-111111111111",
+  "items": [
+    { "productId": "sku-1", "quantity": 2, "unitPrice": 9.99 }
+  ],
+  "totalAmount": 19.98,
+  "shippingAddress": "1 Test Street",
+  "paymentMethod": "card-ending-1234"
+}
+
+###
+
+GET {{OrderSystem.OrderService_HostAddress}}/orders/00000000-0000-0000-0000-000000000000
 Accept: application/json
 
 ###

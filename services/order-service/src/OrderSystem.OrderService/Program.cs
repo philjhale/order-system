@@ -1,3 +1,5 @@
+using OrderSystem.OrderService.Api;
+using OrderSystem.OrderService.Messaging;
 using OrderSystem.OrderService.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +12,9 @@ builder.Services.AddOrderDbContext(
     builder.Configuration.GetConnectionString("OrderDb")
         ?? throw new InvalidOperationException("Missing ConnectionStrings:OrderDb configuration."));
 
+builder.Services.AddEventPublisher(builder.Configuration["ServiceBus:FullyQualifiedNamespace"]);
+builder.Services.AddSingleton(TimeProvider.System);
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -20,28 +25,8 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+app.MapOrderEndpoints();
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+public partial class Program;
