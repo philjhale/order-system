@@ -93,6 +93,20 @@ public sealed class InMemoryEventBus : IEventPublisher, IEventSubscriber
         private readonly CancellationTokenSource _cts;
         private readonly ConcurrentDictionary<Guid, SessionQueue> _sessions = new();
 
+        // Tracks the currently-running pump loop per session so DisposeAsync can wait for
+        // in-flight handler invocations to actually finish (mirroring
+        // ServiceBusSessionProcessor.StopProcessingAsync's graceful drain) instead of
+        // returning immediately after just requesting cancellation — a caller disposing
+        // right after its last expected effect lands (e.g. a test's WebApplicationFactory)
+        // would otherwise race a handler that's still mid-flight against a scope/DbContext
+        // the disposing caller is about to tear down.
+        private readonly ConcurrentDictionary<Guid, Task> _pumpTasks = new();
+
+        // WebApplicationFactory (via its IDisposable/IAsyncDisposable dual teardown path)
+        // has been observed to call DisposeAsync more than once on the same subscription;
+        // without this guard the second call hits an already-disposed CancellationTokenSource.
+        private int _disposed;
+
         public TopicSubscription(EventMessageHandler<TEvent> handler, InMemoryEventBusOptions options, CancellationToken externalToken)
         {
             _handler = handler;
@@ -106,11 +120,23 @@ public sealed class InMemoryEventBus : IEventPublisher, IEventSubscriber
             var startPump = session.Enqueue(new DeliveryAttempt((TEvent)@event));
             if (startPump)
             {
-                _ = Task.Run(() => PumpAsync(session), CancellationToken.None);
+                _pumpTasks[orderId] = Task.Run(() => PumpAsync(orderId, session), CancellationToken.None);
             }
         }
 
-        private async Task PumpAsync(SessionQueue session)
+        private async Task PumpAsync(Guid orderId, SessionQueue session)
+        {
+            try
+            {
+                await RunPumpLoopAsync(session).ConfigureAwait(false);
+            }
+            finally
+            {
+                _pumpTasks.TryRemove(orderId, out _);
+            }
+        }
+
+        private async Task RunPumpLoopAsync(SessionQueue session)
         {
             while (!_cts.IsCancellationRequested)
             {
@@ -163,11 +189,16 @@ public sealed class InMemoryEventBus : IEventPublisher, IEventSubscriber
             }
         }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
             _cts.Cancel();
+            await Task.WhenAll(_pumpTasks.Values.ToArray()).ConfigureAwait(false);
             _cts.Dispose();
-            return ValueTask.CompletedTask;
         }
     }
 

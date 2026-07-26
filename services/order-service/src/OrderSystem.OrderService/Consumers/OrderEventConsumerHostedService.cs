@@ -17,6 +17,12 @@ public sealed class OrderEventConsumerHostedService(
 
     private readonly List<IAsyncDisposable> _subscriptions = [];
 
+    // WebApplicationFactory has been observed to invoke a hosted service's StopAsync more
+    // than once during teardown (its IDisposable and IAsyncDisposable paths both drive the
+    // underlying Host's StopAsync) — without this guard, a second concurrent call iterates
+    // _subscriptions while the first call's Clear() is mutating it.
+    private int _stopped;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _subscriptions.Add(await subscriber.SubscribeAsync<InventoryReserved>(
@@ -57,6 +63,11 @@ public sealed class OrderEventConsumerHostedService(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _stopped, 1) != 0)
+        {
+            return;
+        }
+
         foreach (var subscription in _subscriptions)
         {
             await subscription.DisposeAsync();
