@@ -7,6 +7,13 @@ resource "azurerm_container_app_environment" "shared" {
   name                = "cae-order-system"
   location            = azurerm_resource_group.shared.location
   resource_group_name = azurerm_resource_group.shared.name
+
+  # internal_load_balancer_enabled left at its default (false, public
+  # ingress) rather than pinned explicitly: the provider only accepts
+  # that argument alongside infrastructure_subnet_id, i.e. VNet
+  # integration, which is out of scope for this MVP — Order Service
+  # needs a publicly reachable HTTP API, so public ingress is correct
+  # regardless.
 }
 
 # Standard is mandatory, not a cost choice: Basic supports neither
@@ -49,6 +56,12 @@ resource "azurerm_container_registry" "shared" {
   # the shared user-assigned identity's AcrPull role grant, not the
   # registry's built-in admin username/password.
   admin_enabled = false
+
+  # No fixed IP range to allow-list: pulled from developer machines and
+  # from each service's Container App / GitHub-hosted CI runners' docker
+  # push, none with a stable IP — same rationale as the Service Bus
+  # namespace above.
+  public_network_access_enabled = true
 }
 
 resource "azurerm_role_assignment" "acr_pull" {
