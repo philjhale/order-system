@@ -5,6 +5,14 @@ on:
   push:
     branches: [main]
 
+# A reusable workflow's own `permissions:` block can only narrow what its
+# caller grants it, never add to it — id-token is never part of the
+# GITHUB_TOKEN default permission set, so without this every azure/login
+# step inside the called workflows below would fail to mint an OIDC token.
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   # Detects which service folders a PR/push touches. A shared/** or
   # root-config change is treated as affecting every service (not none),
@@ -19,7 +27,11 @@ jobs:
       payment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.payment-service-only == 'true' }}
       fulfillment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.fulfillment-service-only == 'true' }}
     steps:
+      # paths-filter needs full history to diff push events against
+      # github.event.before; a shallow (default depth-1) checkout can't.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -38,13 +50,11 @@ jobs:
               - 'services/fulfillment-service/**'
 
   shared-build-test:
-    needs: changes
     uses: ./.github/workflows/_dotnet-build-test.yml
     with:
       solution-path: shared/OrderSystem.Shared.sln
 
   terraform-shared:
-    needs: changes
     uses: ./.github/workflows/_terraform-plan-apply.yml
     with:
       working-directory: infra/terraform/shared

@@ -9,8 +9,12 @@ is always available within one workflow run.
 
 - `_dotnet-build-test.yml` — `dotnet restore`/`build`/`test` against a
   given `.sln`.
-- `_docker-build-push.yml` — builds a service's image and pushes it to the
-  shared ACR (`acrordersystem01`), tagged `:latest` and `:${{ github.sha }}`.
+- `_docker-build-push.yml` — builds a service's image, tagged `:latest`
+  and `:${{ github.sha }}`. Its `push: false`/`true` input gates whether
+  it also pushes to the shared ACR (`acrordersystem01`) — callers should
+  pass `push: ${{ github.event_name == 'push' }}` so a PR run only
+  validates the Dockerfile builds, never pushing an unmerged image or
+  overwriting the mutable `:latest` tag.
 - `_terraform-plan-apply.yml` — `terraform plan` on PR runs, `terraform
   apply` on `main` runs, against a given working directory.
 
