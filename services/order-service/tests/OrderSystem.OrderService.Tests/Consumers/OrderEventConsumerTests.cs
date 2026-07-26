@@ -152,15 +152,22 @@ public sealed class OrderEventConsumerTests : IDisposable
     }
 
     [Fact]
-    public async Task PaymentCompleted_redelivered_after_already_Confirmed_does_not_republish_OrderConfirmed()
+    public async Task PaymentCompleted_redelivered_after_already_Confirmed_republishes_OrderConfirmed_without_reapplying_the_transition()
     {
+        // Redelivery is the only signal a handler gets that an earlier attempt's
+        // follow-up publish may never have completed (it's a separate, non-atomic step
+        // from the DB commit) — so it must retry the publish, not skip it. Every
+        // downstream consumer already tolerates duplicate delivery.
         var order = SeedOrder(OrderStatus.Confirmed);
 
         var outcome = await _consumer.HandlePaymentCompletedAsync(
             new PaymentCompleted(order.OrderId, Guid.NewGuid()), CancellationToken.None);
 
         Assert.Equal(MessageOutcome.Complete, outcome);
-        Assert.Empty(_publisher.Published);
+        var published = Assert.Single(_publisher.Published);
+        Assert.IsType<OrderConfirmed>(published);
+        var reloaded = await _db.Orders.FindAsync(order.OrderId);
+        Assert.Equal(3, reloaded!.OrderEvents.Count); // no duplicate audit row for the transition itself
     }
 
     [Fact]
@@ -215,6 +222,19 @@ public sealed class OrderEventConsumerTests : IDisposable
         var reloaded = await _db.Orders.Include(o => o.OrderEvents).FirstAsync(o => o.OrderId == order.OrderId);
         Assert.Equal(OrderStatus.Cancelled, reloaded.Status);
         Assert.Contains(reloaded.OrderEvents, e => e.EventType == OrderEventType.InventoryReleased);
+    }
+
+    [Fact]
+    public async Task InventoryReleased_redelivered_after_already_recorded_does_not_add_a_duplicate_audit_row()
+    {
+        var order = SeedOrder(OrderStatus.Cancelled);
+        await _consumer.HandleInventoryReleasedAsync(new InventoryReleased(order.OrderId), CancellationToken.None);
+
+        var outcome = await _consumer.HandleInventoryReleasedAsync(new InventoryReleased(order.OrderId), CancellationToken.None);
+
+        Assert.Equal(MessageOutcome.Complete, outcome);
+        var reloaded = await _db.Orders.Include(o => o.OrderEvents).FirstAsync(o => o.OrderId == order.OrderId);
+        Assert.Single(reloaded.OrderEvents, e => e.EventType == OrderEventType.InventoryReleased);
     }
 
     [Fact]

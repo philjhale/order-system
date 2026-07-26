@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using OrderSystem.Contracts;
 using OrderSystem.Contracts.Events;
 using OrderSystem.Messaging;
@@ -86,13 +87,22 @@ public sealed class OrderEventConsumer(OrderDbContext db, IEventPublisher publis
             cancellationToken);
 
     // InventoryReleased carries no state transition of its own for Order Service — it's
-    // consumed purely for the audit trail (tasks/todo.md task 9).
+    // consumed purely for the audit trail (tasks/todo.md task 9). Deduplicated against
+    // redelivery (unlike a transition, there's no target-state check to rely on): if an
+    // InventoryReleased audit row already exists for this order, a further delivery is a
+    // no-op rather than a duplicate row.
     public async Task<MessageOutcome> HandleInventoryReleasedAsync(InventoryReleased @event, CancellationToken cancellationToken)
     {
-        var order = await db.Orders.FindAsync([@event.OrderId], cancellationToken);
+        var order = await db.Orders.Include(o => o.OrderEvents)
+            .FirstOrDefaultAsync(o => o.OrderId == @event.OrderId, cancellationToken);
         if (order is null)
         {
             return MessageOutcome.Abandon;
+        }
+
+        if (order.OrderEvents.Any(e => e.EventType == OrderEventType.InventoryReleased))
+        {
+            return MessageOutcome.Complete;
         }
 
         order.RecordAudit(OrderEventType.InventoryReleased, JsonSerializer.Serialize(@event), timeProvider.GetUtcNow());
@@ -115,8 +125,21 @@ public sealed class OrderEventConsumer(OrderDbContext db, IEventPublisher publis
             return MessageOutcome.Abandon;
         }
 
+        // Already applied by an earlier delivery of this same event. The transition
+        // itself is skipped (it isn't legal to re-run — CanTransition(target, target) is
+        // false), but the follow-up publish is retried unconditionally: it's a separate,
+        // non-atomic step from the DB commit, so a message reaching this branch is the
+        // only signal that a previous attempt's publish may never have completed (e.g. it
+        // committed the transition, then failed to publish and was abandoned for
+        // redelivery). Every downstream consumer already has to tolerate duplicate
+        // delivery, so redelivering the follow-up here is safe.
         if (order.Status == target)
         {
+            if (publishFollowUp is not null)
+            {
+                await publishFollowUp(orderId, cancellationToken);
+            }
+
             return MessageOutcome.Complete;
         }
 
