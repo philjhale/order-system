@@ -87,4 +87,12 @@ public sealed class Order
 
         _orderEvents.Add(new OrderEvent(Guid.NewGuid(), OrderId, eventType, from, to, eventData, now));
     }
+
+    // Records an audit-log entry for a consumed event that carries no state
+    // transition of its own (InventoryReleased — task 9) — FromState/ToState
+    // both equal the current, unchanged Status.
+    public void RecordAudit(string eventType, string eventData, DateTimeOffset now)
+    {
+        _orderEvents.Add(new OrderEvent(Guid.NewGuid(), OrderId, eventType, Status, Status, eventData, now));
+    }
 }

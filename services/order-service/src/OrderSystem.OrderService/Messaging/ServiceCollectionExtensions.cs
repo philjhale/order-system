@@ -13,12 +13,14 @@ public static class ServiceCollectionExtensions
         {
             services.AddSingleton<InMemoryEventBus>();
             services.AddSingleton<IEventPublisher>(sp => sp.GetRequiredService<InMemoryEventBus>());
+            services.AddSingleton<IEventSubscriber>(sp => sp.GetRequiredService<InMemoryEventBus>());
         }
         else
         {
             services.AddSingleton(new ServiceBusEventBusOptions { FullyQualifiedNamespace = serviceBusNamespace });
             services.AddSingleton<ServiceBusEventBus>();
             services.AddSingleton<IEventPublisher>(sp => sp.GetRequiredService<ServiceBusEventBus>());
+            services.AddSingleton<IEventSubscriber>(sp => sp.GetRequiredService<ServiceBusEventBus>());
         }
 
         return services;
