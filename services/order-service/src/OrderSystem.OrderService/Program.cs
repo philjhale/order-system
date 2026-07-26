@@ -1,8 +1,14 @@
+using OrderSystem.OrderService.Persistence;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+builder.Services.AddOrderDbContext(
+    builder.Configuration.GetConnectionString("OrderDb")
+        ?? throw new InvalidOperationException("Missing ConnectionStrings:OrderDb configuration."));
 
 var app = builder.Build();
 
