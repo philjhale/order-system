@@ -95,6 +95,16 @@ data "azuread_service_principal" "ci" {
   client_id = var.ci_app_client_id
 }
 
+# CI (task 6) pushes each service's built image to the shared registry
+# from the GitHub-hosted runner, which authenticates as this SP via OIDC
+# rather than the disabled admin user — AcrPull alone (granted above to
+# the runtime pull identity) doesn't cover push.
+resource "azurerm_role_assignment" "acr_push_ci" {
+  scope                = azurerm_container_registry.shared.id
+  role_definition_name = "AcrPush"
+  principal_id         = data.azuread_service_principal.ci.object_id
+}
+
 # Azure SQL's azuread_administrator only accepts a user or group, not a
 # bare service principal, so the CI app's SP is added as a group member
 # rather than named directly as the AAD admin (tasks 10/14/17 wire this

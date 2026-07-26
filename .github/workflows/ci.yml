@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Detects which service folders a PR/push touches. A shared/** or
+  # root-config change is treated as affecting every service (not none),
+  # since every service references shared/ by relative-path project
+  # reference and would otherwise merge with tests silently skipped.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      shared: ${{ steps.filter.outputs.shared }}
+      order-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.order-service-only == 'true' }}
+      inventory-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.inventory-service-only == 'true' }}
+      payment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.payment-service-only == 'true' }}
+      fulfillment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.fulfillment-service-only == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared:
+              - 'shared/**'
+              - 'Directory.Build.props'
+              - '.editorconfig'
+            order-service-only:
+              - 'services/order-service/**'
+            inventory-service-only:
+              - 'services/inventory-service/**'
+            payment-service-only:
+              - 'services/payment-service/**'
+            fulfillment-service-only:
+              - 'services/fulfillment-service/**'
+
+  shared-build-test:
+    needs: changes
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    with:
+      solution-path: shared/OrderSystem.Shared.sln
+
+  terraform-shared:
+    needs: changes
+    uses: ./.github/workflows/_terraform-plan-apply.yml
+    with:
+      working-directory: infra/terraform/shared
+      mode: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
+
+  order-service-build-test:
+    needs: changes
+    if: needs.changes.outputs.order-service == 'true'
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    with:
+      solution-path: services/order-service/OrderSystem.OrderService.sln
+
+  inventory-service-build-test:
+    needs: changes
+    if: needs.changes.outputs.inventory-service == 'true'
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    with:
+      solution-path: services/inventory-service/OrderSystem.InventoryService.sln
+
+  payment-service-build-test:
+    needs: changes
+    if: needs.changes.outputs.payment-service == 'true'
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    with:
+      solution-path: services/payment-service/OrderSystem.PaymentService.sln
+
+  fulfillment-service-build-test:
+    needs: changes
+    if: needs.changes.outputs.fulfillment-service == 'true'
+    uses: ./.github/workflows/_dotnet-build-test.yml
+    with:
+      solution-path: services/fulfillment-service/OrderSystem.FulfillmentService.sln
+
+  # Docker build/push and per-service terraform plan/apply jobs are added
+  # here by tasks 10/14/17/19, one `uses:` block per service, once that
+  # service actually has a Dockerfile and infra/terraform/ to run against.

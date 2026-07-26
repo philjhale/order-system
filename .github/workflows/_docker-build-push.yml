@@ -1,0 +1,52 @@
+name: (reusable) Docker build + push
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: Service folder name under services/, also used as the ACR repository name.
+        required: true
+        type: string
+      dockerfile-path:
+        description: Path to the service's Dockerfile, relative to repo root.
+        required: true
+        type: string
+      context-path:
+        description: Docker build context, relative to repo root.
+        required: true
+        type: string
+      registry-name:
+        description: Shared ACR registry name (not the login server), e.g. acrordersystem01.
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name "${{ inputs.registry-name }}"
+
+      - name: Build and push
+        env:
+          LOGIN_SERVER: ${{ inputs.registry-name }}.azurecr.io
+        run: |
+          docker build \
+            -f "${{ inputs.dockerfile-path }}" \
+            -t "$LOGIN_SERVER/${{ inputs.service-name }}:${{ github.sha }}" \
+            -t "$LOGIN_SERVER/${{ inputs.service-name }}:latest" \
+            "${{ inputs.context-path }}"
+          docker push "$LOGIN_SERVER/${{ inputs.service-name }}:${{ github.sha }}"
+          docker push "$LOGIN_SERVER/${{ inputs.service-name }}:latest"
