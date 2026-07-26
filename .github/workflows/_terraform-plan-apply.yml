@@ -11,6 +11,14 @@ on:
         description: '"plan" (PR runs) or "apply" (post-merge runs on main).'
         required: true
         type: string
+      tf-vars:
+        description: >-
+          Extra `-var` arguments appended verbatim to plan/apply, e.g.
+          "-var image_tag=abc123". Optional — most working directories (e.g.
+          shared/) declare no variables.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   id-token: write
@@ -49,7 +57,7 @@ jobs:
 
       - name: Terraform plan
         if: inputs.mode == 'plan'
-        run: terraform plan -input=false
+        run: terraform plan -input=false ${{ inputs.tf-vars }}
         env:
           ARM_USE_OIDC: "true"
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -58,7 +66,7 @@ jobs:
 
       - name: Terraform apply
         if: inputs.mode == 'apply'
-        run: terraform apply -input=false -auto-approve
+        run: terraform apply -input=false -auto-approve ${{ inputs.tf-vars }}
         env:
           ARM_USE_OIDC: "true"
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}

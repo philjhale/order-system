@@ -88,6 +88,108 @@ jobs:
     with:
       solution-path: services/fulfillment-service/OrderSystem.FulfillmentService.sln
 
+  order-service-docker:
+    needs: [changes, order-service-build-test]
+    if: needs.changes.outputs.order-service == 'true'
+    uses: ./.github/workflows/_docker-build-push.yml
+    with:
+      service-name: order-service
+      dockerfile-path: services/order-service/Dockerfile
+      context-path: .
+      registry-name: acrordersystem01
+      push: ${{ github.event_name != 'pull_request' }}
+
+  # PR runs only get a plan (no image has been pushed yet to actually deploy) — the real
+  # apply + migration-job dance lives in order-service-deploy below, post-merge only.
+  order-service-terraform-plan:
+    needs: changes
+    if: needs.changes.outputs.order-service == 'true' && github.event_name == 'pull_request'
+    uses: ./.github/workflows/_terraform-plan-apply.yml
+    with:
+      working-directory: services/order-service/infra/terraform
+      mode: plan
+      tf-vars: -var image_tag=${{ github.sha }}
+
+  # Not expressed as a call into _terraform-plan-apply.yml: unlike shared/, this apply has to be
+  # staged in two passes around the migration job, which the generic reusable workflow doesn't
+  # (yet) support. Revisit folding this into a shared template once a second service (task 14/17)
+  # needs the identical dance.
+  order-service-deploy:
+    needs: [changes, order-service-build-test, terraform-shared, order-service-docker]
+    if: needs.changes.outputs.order-service == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/order-service/infra/terraform
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        run: terraform init
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Updates only the migration job's image first, so the migration below runs against the
+      # *new* image's EF Core migrations before the Container App (updated in the second apply)
+      # starts serving that same image's code against a not-yet-migrated schema.
+      - name: Terraform apply (migration job only)
+        run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -var "image_tag=${{ github.sha }}"
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # A one-shot job run isn't covered by the application-level EnableRetryOnFailure() (task
+      # 7) and can hit a freshly-idle Serverless DB's resume window, hence the retry/wait loop
+      # here rather than a single `job start` call.
+      - name: Run migration job and wait for completion
+        run: |
+          set -euo pipefail
+          SQL_TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          EXECUTION=$(az containerapp job start \
+            --name caj-order-service-migrate \
+            --resource-group rg-order-system \
+            --env-vars "Sql__CiAccessToken=$SQL_TOKEN" \
+            --query name -o tsv)
+          for attempt in $(seq 1 30); do
+            STATUS=$(az containerapp job execution list \
+              --name caj-order-service-migrate \
+              --resource-group rg-order-system \
+              --query "[?name=='$EXECUTION'].properties.status | [0]" -o tsv)
+            echo "Migration job status: $STATUS"
+            case "$STATUS" in
+              Succeeded) exit 0 ;;
+              Failed) exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "Timed out waiting for migration job execution"
+          exit 1
+
+      - name: Terraform apply (full)
+        run: terraform apply -input=false -auto-approve -var "image_tag=${{ github.sha }}"
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
   # Docker build/push and per-service terraform plan/apply jobs are added
-  # here by tasks 10/14/17/19, one `uses:` block per service, once that
-  # service actually has a Dockerfile and infra/terraform/ to run against.
+  # here by tasks 14/17/19, one set of `uses:`/job blocks per service, once
+  # that service actually has a Dockerfile and infra/terraform/ to run
+  # against.
