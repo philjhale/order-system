@@ -1,4 +1,5 @@
 using OrderSystem.OrderService.Api;
+using OrderSystem.OrderService.Consumers;
 using OrderSystem.OrderService.Messaging;
 using OrderSystem.OrderService.Persistence;
 
@@ -14,6 +15,9 @@ builder.Services.AddOrderDbContext(
 
 builder.Services.AddEventPublisher(builder.Configuration["ServiceBus:FullyQualifiedNamespace"]);
 builder.Services.AddSingleton(TimeProvider.System);
+
+builder.Services.AddScoped<OrderEventConsumer>();
+builder.Services.AddHostedService<OrderEventConsumerHostedService>();
 
 var app = builder.Build();
 

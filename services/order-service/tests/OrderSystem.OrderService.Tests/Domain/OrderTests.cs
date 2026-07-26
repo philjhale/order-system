@@ -57,6 +57,22 @@ public class OrderTests
     }
 
     [Fact]
+    public void RecordAudit_appends_an_event_without_changing_status()
+    {
+        var order = CreateOrder();
+        var auditTime = Now.AddMinutes(5);
+
+        order.RecordAudit(OrderEventType.InventoryReleased, "{}", auditTime);
+
+        Assert.Equal(OrderStatus.Created, order.Status);
+        Assert.Equal(2, order.OrderEvents.Count);
+        var latestEvent = order.OrderEvents[^1];
+        Assert.Equal(OrderEventType.InventoryReleased, latestEvent.EventType);
+        Assert.Equal(OrderStatus.Created, latestEvent.FromState);
+        Assert.Equal(OrderStatus.Created, latestEvent.ToState);
+    }
+
+    [Fact]
     public void Transition_rejects_an_illegal_transition_and_records_no_event()
     {
         var order = CreateOrder();

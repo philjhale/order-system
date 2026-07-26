@@ -133,6 +133,48 @@ public class InMemoryEventBusTests
         Assert.Equal(3, attemptCount);
     }
 
+    [Fact]
+    public async Task Subscription_DisposeAsync_CalledTwice_DoesNotThrow()
+    {
+        // WebApplicationFactory's IDisposable/IAsyncDisposable dual teardown path has
+        // been observed to dispose a hosted service's subscriptions more than once —
+        // DisposeAsync must be idempotent rather than hitting an already-disposed
+        // CancellationTokenSource on the second call.
+        var bus = new InMemoryEventBus();
+        var subscription = await bus.SubscribeAsync<OrderShipped>(
+            "order-service", (_, _) => Task.FromResult(MessageOutcome.Complete));
+
+        await subscription.DisposeAsync();
+        await subscription.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Subscription_DisposeAsync_WaitsForAnInFlightHandlerToFinish()
+    {
+        var bus = new InMemoryEventBus();
+        var handlerStarted = new TaskCompletionSource();
+        var releaseHandler = new TaskCompletionSource();
+        var handlerCompleted = false;
+
+        var subscription = await bus.SubscribeAsync<OrderShipped>("order-service", async (_, _) =>
+        {
+            handlerStarted.TrySetResult();
+            await releaseHandler.Task;
+            handlerCompleted = true;
+            return MessageOutcome.Complete;
+        });
+
+        await bus.PublishAsync(new OrderShipped(Guid.NewGuid()));
+        await WaitAsync(handlerStarted.Task);
+
+        var disposeTask = subscription.DisposeAsync().AsTask();
+        Assert.False(disposeTask.IsCompleted); // still draining the in-flight handler
+
+        releaseHandler.TrySetResult();
+        await WaitAsync(disposeTask);
+        Assert.True(handlerCompleted);
+    }
+
     private static async Task<T> WaitAsync<T>(Task<T> task, int timeoutMs = 5000)
     {
         var completed = await Task.WhenAny(task, Task.Delay(timeoutMs));

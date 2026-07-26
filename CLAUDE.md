@@ -4,7 +4,7 @@
 
 After `/agent-skills:build` implements a task, always run
 `/agent-skills:review` against that task's diff before marking it done,
-and fix any Critical findings it reports before moving on.
+and fix any Critical findings it reports before moving on. Then push the changes and open a pull request.
 
 ## Generation time tracking
 

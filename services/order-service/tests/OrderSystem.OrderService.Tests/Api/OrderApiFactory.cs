@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using OrderSystem.Contracts.Events;
 using OrderSystem.Messaging;
 using OrderSystem.OrderService.Persistence;
@@ -47,6 +48,15 @@ public sealed class OrderApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<IEventPublisher>();
             services.AddSingleton<IEventPublisher>(Publisher);
+
+            // These tests only exercise the HTTP API, not event consumption — running
+            // OrderEventConsumerHostedService here serves no purpose and, combined with
+            // WebApplicationFactory's internal "throwaway host" (see the comment on
+            // _databaseName above), was observed to race its background subscriptions
+            // against host teardown and intermittently fail CI with an
+            // ObjectDisposedException during test-class cleanup. OrderEventConsumerTests
+            // and OrderEventConsumerIntegrationTests cover the consumer itself.
+            services.RemoveAll<IHostedService>();
         });
     }
 }
