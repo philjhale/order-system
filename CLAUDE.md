@@ -2,9 +2,10 @@
 
 ## Build → review → fix, every task
 
-After `/agent-skills:build` implements a task, always run
-`/agent-skills:review` against that task's diff before marking it done,
-and fix any Critical findings it reports before moving on.
+After `/agent-skills:build` implements a task, run `/compact` to compact
+the conversation, then run `/agent-skills:review` against that task's
+diff before marking it done, and fix any Critical findings it reports
+before moving on.
 
 ## Generation time tracking
 
