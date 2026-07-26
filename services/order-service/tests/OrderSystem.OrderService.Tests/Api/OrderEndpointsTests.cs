@@ -74,6 +74,19 @@ public sealed class OrderEndpointsTests : IClassFixture<OrderApiFactory>
     }
 
     [Fact]
+    public async Task POST_orders_with_a_duplicate_product_id_returns_400()
+    {
+        var request = ValidRequest() with
+        {
+            Items = [new CreateOrderItemRequest("sku-1", 1, 1m), new CreateOrderItemRequest("sku-1", 2, 1m)],
+        };
+
+        var response = await _client.PostAsJsonAsync("/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task POST_orders_with_a_non_positive_quantity_returns_400()
     {
         var request = ValidRequest() with { Items = [new CreateOrderItemRequest("sku-1", 0, 9.99m)] };

@@ -105,6 +105,19 @@ public static class OrderEndpoints
             }
         }
 
+        // OrderItem's primary key is (OrderId, ProductId) — a duplicate ProductId
+        // would otherwise reach SaveChangesAsync and fail as an unhandled 500
+        // (duplicate tracked-entity key), not a clean 400.
+        var duplicateProductIds = request.Items
+            .Select(i => i.ProductId)
+            .GroupBy(id => id)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key);
+        foreach (var productId in duplicateProductIds)
+        {
+            AddError(nameof(request.Items), $"ProductId '{productId}' appears more than once in the order.");
+        }
+
         if (request.TotalAmount < 0)
         {
             AddError(nameof(request.TotalAmount), "TotalAmount cannot be negative.");
