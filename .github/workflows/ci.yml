@@ -14,10 +14,11 @@ permissions:
   contents: read
 
 jobs:
-  # Detects which service folders a PR/push touches. A shared/** or
-  # root-config change is treated as affecting every service (not none),
-  # since every service references shared/ by relative-path project
-  # reference and would otherwise merge with tests silently skipped.
+  # Detects which service folders a PR/push touches. A shared/**, root-config, or CI workflow
+  # change is treated as affecting every service (not none): shared/ is referenced by every
+  # service via relative-path project reference, and .github/workflows/** controls every
+  # service's build/deploy logic directly — either would otherwise merge with the affected
+  # service's build/deploy silently skipped.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -40,6 +41,7 @@ jobs:
               - 'shared/**'
               - 'Directory.Build.props'
               - '.editorconfig'
+              - '.github/workflows/**'
             order-service-only:
               - 'services/order-service/**'
             inventory-service-only:
