@@ -22,7 +22,7 @@ WORKDIR /app
 COPY --from=build /app .
 
 # Matches the base image's default ASPNETCORE_HTTP_PORTS (8080) — the Container App's ingress
-# target_port (task 10 Terraform) is set to the same value.
+# target_port (services/order-service/infra/terraform) is set to the same value.
 EXPOSE 8080
 
 # The same image also serves as the azurerm_container_app_job image, invoked as
