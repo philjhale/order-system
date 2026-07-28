@@ -124,6 +124,13 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    # azurerm provider uses ARM_USE_OIDC + the azure/login-issued federated token rather than
+    # a client secret. Set at job level since every terraform step below needs it.
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -137,26 +144,16 @@ jobs:
 
       - name: Terraform init
         run: terraform init
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # Updates only the migration job's image first, so the migration below runs against the
       # *new* image's EF Core migrations before the Container App (updated in the second apply)
       # starts serving that same image's code against a not-yet-migrated schema.
       - name: Terraform apply (migration job only)
         run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -var "image_tag=${{ github.sha }}"
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # A one-shot job run isn't covered by the application-level EnableRetryOnFailure() (task
-      # 7) and can hit a freshly-idle Serverless DB's resume window, hence the retry/wait loop
-      # here rather than a single `job start` call.
+      # A one-shot job run isn't covered by the application-level EnableRetryOnFailure() and
+      # can hit a freshly-idle Serverless DB's resume window, hence the retry/wait loop here
+      # rather than a single `job start` call.
       - name: Run migration job and wait for completion
         run: |
           set -euo pipefail
@@ -166,10 +163,13 @@ jobs:
           # `job start --env-vars` replaces the container's whole env list rather than merging
           # into it, so every var the targeted apply above just set on the job template has to
           # be resupplied here too, not just the token — otherwise the migration job runs with
-          # ConnectionStrings__OrderDb etc. missing and fails immediately.
+          # ConnectionStrings__OrderDb etc. missing and fails immediately. Read from Terraform
+          # outputs rather than hardcoded, so these can't drift from the actual resource names.
           SQL_SERVER_FQDN=$(terraform output -raw sql_server_fqdn)
+          SQL_DATABASE_NAME=$(terraform output -raw sql_database_name)
           IDENTITY_CLIENT_ID=$(terraform output -raw managed_identity_client_id)
-          CONNECTION_STRING="Server=tcp:${SQL_SERVER_FQDN},1433;Database=order-service;Authentication=Active Directory Managed Identity;User Id=${IDENTITY_CLIENT_ID};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+          IDENTITY_NAME=$(terraform output -raw managed_identity_name)
+          CONNECTION_STRING="Server=tcp:${SQL_SERVER_FQDN},1433;Database=${SQL_DATABASE_NAME};Authentication=Active Directory Managed Identity;User Id=${IDENTITY_CLIENT_ID};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
 
           EXECUTION=$(az containerapp job start \
             --name caj-order-service-migrate \
@@ -177,8 +177,8 @@ jobs:
             --env-vars \
               "ConnectionStrings__OrderDb=$CONNECTION_STRING" \
               "Sql__ServerFqdn=$SQL_SERVER_FQDN" \
-              "Sql__DatabaseName=order-service" \
-              "Sql__ManagedIdentityName=id-order-service" \
+              "Sql__DatabaseName=$SQL_DATABASE_NAME" \
+              "Sql__ManagedIdentityName=$IDENTITY_NAME" \
               "Sql__CiAccessToken=$SQL_TOKEN" \
             --query name -o tsv)
 
@@ -202,11 +202,6 @@ jobs:
 
       - name: Terraform apply (full)
         run: terraform apply -input=false -auto-approve -var "image_tag=${{ github.sha }}"
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
   # Docker build/push and per-service terraform plan/apply jobs are added
   # here, one set of `uses:`/job blocks per service, once that service

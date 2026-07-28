@@ -19,9 +19,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-builder.Services.AddOrderDbContext(
-    builder.Configuration.GetConnectionString("OrderDb")
-        ?? throw new InvalidOperationException("Missing ConnectionStrings:OrderDb configuration."));
+builder.Services.AddOrderDbContext(GetOrderDbConnectionString(builder.Configuration));
 
 builder.Services.AddEventPublisher(builder.Configuration["ServiceBus:FullyQualifiedNamespace"]);
 builder.Services.AddSingleton(TimeProvider.System);
@@ -49,12 +47,14 @@ app.MapHealthChecks("/health");
 
 app.Run();
 
+static string GetOrderDbConnectionString(IConfiguration configuration) =>
+    configuration.GetConnectionString("OrderDb")
+        ?? throw new InvalidOperationException("Missing ConnectionStrings:OrderDb configuration.");
+
 static async Task RunMigrationAsync(string[] args)
 {
     var hostBuilder = Host.CreateApplicationBuilder(args);
-    hostBuilder.Services.AddOrderDbContext(
-        hostBuilder.Configuration.GetConnectionString("OrderDb")
-            ?? throw new InvalidOperationException("Missing ConnectionStrings:OrderDb configuration."));
+    hostBuilder.Services.AddOrderDbContext(GetOrderDbConnectionString(hostBuilder.Configuration));
     hostBuilder.Services.Configure<SqlMigrationOptions>(hostBuilder.Configuration.GetSection("Sql"));
     hostBuilder.Services.AddSingleton<ISqlContainedUserProvisioner, SqlContainedUserProvisioner>();
     hostBuilder.Services.AddScoped<IOrderDbMigrator, OrderDbMigrator>();

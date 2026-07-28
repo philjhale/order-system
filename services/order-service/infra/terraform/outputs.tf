@@ -10,6 +10,14 @@ output "sql_server_fqdn" {
   value = azurerm_mssql_server.order_service.fully_qualified_domain_name
 }
 
+output "sql_database_name" {
+  value = azurerm_mssql_database.order_service.name
+}
+
+output "managed_identity_name" {
+  value = azurerm_user_assigned_identity.order_service.name
+}
+
 output "container_app_job_name" {
   value = azurerm_container_app_job.order_service_migrate.name
 }
