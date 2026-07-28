@@ -83,6 +83,11 @@ resource "azurerm_mssql_database" "order_service" {
   min_capacity                = 0.5
   auto_pause_delay_in_minutes = 60
 
+  # Provider default is "Geo" (geo-redundant backup storage), which spaincentral doesn't
+  # support ("ProvisioningDisabled: Provisioning of geo-redundant storage is not available in
+  # this region") — Local (LRS) is also the cheaper, adequate choice for this MVP.
+  storage_account_type = "Local"
+
   lifecycle {
     prevent_destroy = true
   }
