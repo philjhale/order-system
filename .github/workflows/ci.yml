@@ -112,8 +112,8 @@ jobs:
 
   # Not expressed as a call into _terraform-plan-apply.yml: unlike shared/, this apply has to be
   # staged in two passes around the migration job, which the generic reusable workflow doesn't
-  # (yet) support. Revisit folding this into a shared template once a second service (task 14/17)
-  # needs the identical dance.
+  # (yet) support. Revisit folding this into a shared template once a second service with its own
+  # database needs the identical dance.
   order-service-deploy:
     needs: [changes, order-service-build-test, terraform-shared, order-service-docker]
     if: needs.changes.outputs.order-service == 'true' && github.event_name != 'pull_request'
@@ -209,6 +209,5 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
   # Docker build/push and per-service terraform plan/apply jobs are added
-  # here by tasks 14/17/19, one set of `uses:`/job blocks per service, once
-  # that service actually has a Dockerfile and infra/terraform/ to run
-  # against.
+  # here, one set of `uses:`/job blocks per service, once that service
+  # actually has a Dockerfile and infra/terraform/ to run against.

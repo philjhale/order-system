@@ -89,7 +89,7 @@ public sealed class Order
     }
 
     // Records an audit-log entry for a consumed event that carries no state
-    // transition of its own (InventoryReleased — task 9) — FromState/ToState
+    // transition of its own (InventoryReleased) — FromState/ToState
     // both equal the current, unchanged Status.
     public void RecordAudit(string eventType, string eventData, DateTimeOffset now)
     {

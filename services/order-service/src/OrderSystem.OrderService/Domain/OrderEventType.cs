@@ -4,7 +4,7 @@ namespace OrderSystem.OrderService.Domain;
 // shared/OrderSystem.Contracts/Events/*.cs — OrderEvent.EventType is
 // audit-log metadata, not a dispatch key, but keeping it a compiler-checked
 // constant instead of a literal avoids silent typos/divergence across the
-// call sites that will be added in task 9 (event consumers).
+// call sites in the event consumers.
 public static class OrderEventType
 {
     public const string OrderCreated = nameof(OrderCreated);

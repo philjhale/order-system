@@ -5,7 +5,7 @@ namespace OrderSystem.OrderService.Messaging;
 public static class ServiceCollectionExtensions
 {
     // ServiceBus:FullyQualifiedNamespace is only populated once the Container App's
-    // managed identity has Service Bus RBAC (task 10); until then — local `dotnet run`
+    // managed identity has Service Bus RBAC; until then — local `dotnet run`
     // and this service's own tests — publishing falls back to the in-process bus.
     public static IServiceCollection AddEventPublisher(this IServiceCollection services, string? serviceBusNamespace)
     {

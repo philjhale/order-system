@@ -35,12 +35,11 @@ affecting *every* service, since each one references `shared/` by
 relative-path project reference.
 
 Each service's `docker-build-push` and `terraform-plan-apply` job calls
-are added to `ci.yml` by that service's own deploy task (10/14/17/19),
-once its `Dockerfile` and `infra/terraform/` actually exist — invoking
-either reusable workflow against a service that doesn't have those files
-yet would just fail.
+are added to `ci.yml` once that service actually has its own `Dockerfile`
+and `infra/terraform/` — invoking either reusable workflow against a
+service that doesn't have those files yet would just fail.
 
-Order Service (task 10, and every future service with its own DB) needs
+Order Service (and every other service with its own DB) needs
 migrations applied inside Azure between building the image and rolling out
 the new Container App revision, so its post-merge deploy isn't a plain
 `_terraform-plan-apply.yml` call: `order-service-deploy` in `ci.yml` runs

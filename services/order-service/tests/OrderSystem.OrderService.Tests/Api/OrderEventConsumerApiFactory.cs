@@ -8,7 +8,7 @@ using OrderSystem.OrderService.Persistence;
 namespace OrderSystem.OrderService.Tests.Api;
 
 // Unlike OrderApiFactory, this leaves the real InMemoryEventBus wired as both
-// IEventPublisher and IEventSubscriber (task 9's registration in
+// IEventPublisher and IEventSubscriber (registered in
 // OrderService.Messaging.ServiceCollectionExtensions) so tests can publish an event
 // through the same bus OrderEventConsumerHostedService subscribed to, and observe the
 // consumer's effect via the HTTP API.

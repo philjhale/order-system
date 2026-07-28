@@ -7,7 +7,7 @@ variable "location" {
 variable "ci_app_client_id" {
   description = <<-EOT
     Client (application) ID of the "order-system-ci" Azure AD app
-    registration created in task 4's manual bootstrap step
+    registration created by the one-time manual bootstrap step
     (infra/terraform-bootstrap/README.md, section 4). Its service
     principal is looked up by this ID and added as a member of the
     SQL AAD-admin group, since Azure SQL's azuread_administrator block

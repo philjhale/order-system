@@ -14,7 +14,7 @@ public sealed class ServiceBusEventBusOptions
     public TimeSpan RedeliveryDelay { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Matches the Service Bus subscription's own MaxDeliveryCount (task 5). Tracked
+    /// Matches the Service Bus subscription's own MaxDeliveryCount. Tracked
     /// separately here because completing+recloning on Abandon resets Service Bus's
     /// native per-message delivery count, so the subscription's own MaxDeliveryCount
     /// would otherwise never fire for a genuinely poison message.

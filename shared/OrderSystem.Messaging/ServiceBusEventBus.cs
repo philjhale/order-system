@@ -10,8 +10,8 @@ namespace OrderSystem.Messaging;
 /// Production IEventPublisher/IEventSubscriber wiring: Azure Service Bus, one topic
 /// per event type (named after the event's CLR type, e.g. "OrderCreated"), session id
 /// = OrderId for per-order ordering. Authenticates via DefaultAzureCredential against
-/// the namespace's own managed identity (task 5/10/14/17/19) — no connection string or
-/// secret anywhere.
+/// each service's own user-assigned managed identity, granted Service Bus data-plane
+/// RBAC on the shared namespace — no connection string or secret anywhere.
 /// </summary>
 public sealed class ServiceBusEventBus : IEventPublisher, IEventSubscriber, IAsyncDisposable
 {

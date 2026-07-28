@@ -15,7 +15,7 @@ locals {
   servicebus_fully_qualified_namespace = "${data.terraform_remote_state.shared.outputs.servicebus_namespace_name}.servicebus.windows.net"
 }
 
-# Dedicated to this service — separate from task 5's shared ACR-pull identity, since Service Bus
+# Dedicated to this service — separate from the shared foundation's ACR-pull identity, since Service Bus
 # data-plane RBAC and the SQL contained-user grant are both per-service, not environment-wide.
 # Attached to both the always-running Container App and the migration job (below), so the
 # db_ddladmin role the migration job's contained-user grant includes (required for EF Core's
@@ -34,8 +34,9 @@ resource "azurerm_role_assignment" "order_service_servicebus_data_owner" {
   principal_id         = azurerm_user_assigned_identity.order_service.principal_id
 }
 
-# Azure-AD-only auth (no SQL-auth admin/password anywhere) — sql-admins-order-system (task 5) is
-# the server's AAD admin; this service's own identity is added as a contained DB user by the
+# Azure-AD-only auth (no SQL-auth admin/password anywhere) — sql-admins-order-system (the
+# shared foundation's SQL AAD-admin group) is the server's AAD admin; this service's own
+# identity is added as a contained DB user by the
 # migration job (below), not by Terraform, since the GitHub-hosted runner has no network path to
 # the server (firewall only allows Azure services).
 resource "azurerm_mssql_server" "order_service" {
@@ -73,7 +74,7 @@ resource "azurerm_mssql_database" "order_service" {
   server_id = azurerm_mssql_server.order_service.id
 
   # Serverless: auto-pauses when idle to keep MVP cost down (services/order-service's
-  # EnableRetryOnFailure(), task 7, exists specifically to survive the resume latency this
+  # EnableRetryOnFailure() exists specifically to survive the resume latency this
   # causes).
   sku_name                    = "GP_S_Gen5_1"
   min_capacity                = 0.5
@@ -85,7 +86,7 @@ resource "azurerm_mssql_database" "order_service" {
 }
 
 # Owned by Order Service — Inventory/Payment/Fulfillment's own subscriptions to these are added
-# in tasks 12/14/17/19 once those services exist, not here.
+# in each of those services' own Terraform once they exist, not here.
 resource "azurerm_servicebus_topic" "order_created" {
   name         = "OrderCreated"
   namespace_id = data.terraform_remote_state.shared.outputs.servicebus_namespace_id
@@ -132,7 +133,7 @@ resource "azurerm_container_app" "order_service" {
   }
 
   template {
-    # Order Service also consumes Service Bus events (task 9) on subscriptions Container Apps'
+    # Order Service also consumes Service Bus events on subscriptions Container Apps'
     # default HTTP-driven scaling has no way to wake for — without a floor of 1, the app would
     # scale to zero between HTTP calls and never process InventoryReserved/PaymentCompleted/etc.
     min_replicas = 1

@@ -10,7 +10,7 @@ namespace OrderSystem.OrderService.Tests.Api;
 // End-to-end through the real message bus: publishes an event the same way
 // Inventory/Payment/Fulfillment Service would, via the IEventPublisher registered in
 // this host's own DI container, then confirms OrderEventConsumerHostedService's
-// subscription picked it up and applied the state transition (task 9).
+// subscription picked it up and applied the state transition.
 public sealed class OrderEventConsumerIntegrationTests : IClassFixture<OrderEventConsumerApiFactory>
 {
     private readonly OrderEventConsumerApiFactory _factory;

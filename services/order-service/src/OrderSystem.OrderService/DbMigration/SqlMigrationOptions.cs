@@ -2,7 +2,7 @@ namespace OrderSystem.OrderService.DbMigration;
 
 /// <summary>
 /// Bound from the "Sql" configuration section, populated only for the `migrate` CLI mode's
-/// container app job (task 10) — the normal running Container App never sets these.
+/// container app job (services/order-service/infra/terraform) — the normal running Container App never sets these.
 /// </summary>
 public sealed class SqlMigrationOptions
 {

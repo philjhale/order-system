@@ -1,5 +1,6 @@
-# Reads task 5's shared foundation state — resource group, Container Apps environment, Service
-# Bus namespace, ACR, and the SQL AAD-admin group — rather than duplicating any of it here.
+# Reads the shared foundation's state (infra/terraform/shared) — resource group, Container Apps
+# environment, Service Bus namespace, ACR, and the SQL AAD-admin group — rather than duplicating
+# any of it here.
 data "terraform_remote_state" "shared" {
   backend = "azurerm"
 

@@ -10,7 +10,7 @@ namespace OrderSystem.OrderService.Consumers;
 
 /// <summary>
 /// Applies the state transitions from docs/SPEC.md's Order State Machine table for every
-/// event Order Service consumes (task 9). One instance is resolved per delivered message
+/// event Order Service consumes. One instance is resolved per delivered message
 /// from a fresh DI scope (see OrderEventConsumerHostedService) so the scoped OrderDbContext
 /// is never shared across concurrent deliveries.
 ///
@@ -87,7 +87,7 @@ public sealed class OrderEventConsumer(OrderDbContext db, IEventPublisher publis
             cancellationToken);
 
     // InventoryReleased carries no state transition of its own for Order Service — it's
-    // consumed purely for the audit trail (tasks/todo.md task 9). Deduplicated against
+    // consumed purely for the audit trail. Deduplicated against
     // redelivery (unlike a transition, there's no target-state check to rely on): if an
     // InventoryReleased audit row already exists for this order, a further delivery is a
     // no-op rather than a duplicate row.

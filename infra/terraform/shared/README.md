@@ -10,16 +10,16 @@
   yet; each service phase creates its own in its own Terraform.
 - User-assigned managed identity `id-order-system-acr-pull`, granted
   `AcrPull` on the shared registry. Each service's own Terraform
-  (tasks 10/14/17/19) attaches this same identity to its Container App.
+  attaches this same identity to its Container App.
 - Container Registry `acrordersystem01`, shared by all 4 services (each
   gets its own repository within it, e.g. `order-service`).
 - AAD group `sql-admins-order-system`, with the CI app registration
   (`infra/terraform-bootstrap/README.md` section 4) added as a member.
-  Each service's own SQL server (tasks 10/14/17) names this group as its
-  `azuread_administrator` — Azure SQL only accepts a user or group there,
-  not a bare service principal.
+  Each service's own SQL server (the ones with a database) names this
+  group as its `azuread_administrator` — Azure SQL only accepts a user or
+  group there, not a bare service principal.
 - The CI app registration's service principal is also granted `AcrPush` on
-  the shared registry directly (task 6) — separate from the `AcrPull`
+  the shared registry directly — separate from the `AcrPull`
   grant above, which belongs to the *runtime* pull identity, not CI. This
   lets the `docker-build-push` reusable workflow (`.github/workflows/`)
   push each service's image from the GitHub-hosted runner, which
@@ -44,8 +44,8 @@ terraform apply
 ```
 
 In CI, this runs as the `terraform plan`/`apply` job for `shared/`
-described in task 6, authenticated via the same CI app registration via
-OIDC (`azure/login`).
+(`.github/workflows/ci.yml`), authenticated via the same CI app
+registration via OIDC (`azure/login`).
 
 ## Consumed by
 

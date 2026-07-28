@@ -5,7 +5,7 @@ namespace OrderSystem.Messaging;
 
 /// <summary>
 /// In-process stand-in for the Azure Service Bus topic/subscription model, for unit
-/// tests and local `dotnet run` (task 3). Not used in production — see
+/// tests and local `dotnet run`. Not used in production — see
 /// ServiceBusEventBus for the real wiring.
 ///
 /// Mirrors session-based ordering: events for the same OrderId are delivered to a

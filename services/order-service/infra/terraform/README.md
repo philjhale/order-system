@@ -23,7 +23,7 @@ shared foundation (`infra/terraform/shared/`):
   and then applies EF Core migrations.
 - Service Bus topics owned by this service: `OrderCreated`, `OrderCancelled`,
   `OrderConfirmed`. Other services' subscriptions to these are added by
-  their own Terraform once they exist (tasks 12/14/17/19), not here.
+  their own Terraform once they exist, not here.
 
 No Key Vault, no stored connection strings/secrets: every credential here is
 either a resolved managed-identity token or (for the one-time contained-user

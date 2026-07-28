@@ -5,7 +5,7 @@ using OrderSystem.OrderService.Messaging;
 using OrderSystem.OrderService.DbMigration;
 using OrderSystem.OrderService.Persistence;
 
-// Run by the azurerm_container_app_job (task 10) instead of the normal web host — provisions
+// Run by the azurerm_container_app_job (services/order-service/infra/terraform) instead of the normal web host — provisions
 // this service's managed identity as a contained DB user, then applies EF Core migrations.
 if (args.Length > 0 && args[0] == "migrate")
 {

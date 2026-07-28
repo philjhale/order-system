@@ -2,9 +2,9 @@ resource "azurerm_resource_group" "shared" {
   name     = "rg-order-system"
   location = var.location
 
-  # Every service's Terraform (tasks 10/14/17/19) depends on this
-  # resource group via terraform_remote_state — an accidental destroy
-  # here cascades to all four services at once.
+  # Every service's Terraform depends on this resource group via
+  # terraform_remote_state — an accidental destroy here cascades to all
+  # four services at once.
   lifecycle {
     prevent_destroy = true
   }
@@ -42,9 +42,9 @@ resource "azurerm_servicebus_namespace" "shared" {
   # with a stable IP.
   public_network_access_enabled = true
 
-  # Every service's Terraform (tasks 10/14/17/19) depends on this
-  # namespace via terraform_remote_state — an accidental destroy here
-  # cascades to all four services at once.
+  # Every service's Terraform depends on this namespace via
+  # terraform_remote_state — an accidental destroy here cascades to all
+  # four services at once.
   lifecycle {
     prevent_destroy = true
   }
@@ -77,9 +77,9 @@ resource "azurerm_container_registry" "shared" {
   # namespace above.
   public_network_access_enabled = true
 
-  # Every service's Terraform (tasks 10/14/17/19) depends on this
-  # registry via terraform_remote_state — an accidental destroy here
-  # cascades to all four services at once.
+  # Every service's Terraform depends on this registry via
+  # terraform_remote_state — an accidental destroy here cascades to all
+  # four services at once.
   lifecycle {
     prevent_destroy = true
   }
@@ -95,10 +95,10 @@ data "azuread_service_principal" "ci" {
   client_id = var.ci_app_client_id
 }
 
-# CI (task 6) pushes each service's built image to the shared registry
-# from the GitHub-hosted runner, which authenticates as this SP via OIDC
-# rather than the disabled admin user — AcrPull alone (granted above to
-# the runtime pull identity) doesn't cover push.
+# CI pushes each service's built image to the shared registry from the
+# GitHub-hosted runner, which authenticates as this SP via OIDC rather
+# than the disabled admin user — AcrPull alone (granted above to the
+# runtime pull identity) doesn't cover push.
 resource "azurerm_role_assignment" "acr_push_ci" {
   scope                = azurerm_container_registry.shared.id
   role_definition_name = "AcrPush"
@@ -107,8 +107,9 @@ resource "azurerm_role_assignment" "acr_push_ci" {
 
 # Azure SQL's azuread_administrator only accepts a user or group, not a
 # bare service principal, so the CI app's SP is added as a group member
-# rather than named directly as the AAD admin (tasks 10/14/17 wire this
-# group as each service's SQL server's azuread_administrator).
+# rather than named directly as the AAD admin — each service's SQL
+# server (the ones with a database) wires this group in as its
+# azuread_administrator.
 resource "azuread_group" "sql_admins" {
   display_name     = "sql-admins-order-system"
   security_enabled = true
