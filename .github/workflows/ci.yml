@@ -151,6 +151,17 @@ jobs:
       - name: Terraform apply (migration job only)
         run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -var "image_tag=${{ github.sha }}"
 
+      # Re-authenticate right before fetching the SQL token: the targeted apply above can take
+      # long enough (real cross-region SQL server/database provisioning, not just a fast
+      # rejection) that the GitHub OIDC assertion from the job's first azure/login step has
+      # expired (its own validity window is ~5 minutes) by the time `az account get-access-token`
+      # needs to exchange it for a new resource scope, failing with AADSTS700024.
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       # A one-shot job run isn't covered by the application-level EnableRetryOnFailure() and
       # can hit a freshly-idle Serverless DB's resume window, hence the retry/wait loop here
       # rather than a single `job start` call.
