@@ -1,5 +1,6 @@
 using OrderSystem.OrderService.Api;
 using OrderSystem.OrderService.Consumers;
+using OrderSystem.OrderService.HealthChecks;
 using OrderSystem.OrderService.Messaging;
 using OrderSystem.OrderService.DbMigration;
 using OrderSystem.OrderService.Persistence;
@@ -28,6 +29,11 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<OrderEventConsumer>();
 builder.Services.AddHostedService<OrderEventConsumerHostedService>();
 
+// Backs the Container App's liveness/readiness probes (services/order-service/infra/terraform) —
+// round-trips to SQL rather than a bare TCP check, so a not-yet-resumed Serverless DB or missing
+// contained user takes the replica out of rotation instead of serving 500s.
+builder.Services.AddHealthChecks().AddCheck<OrderDbHealthCheck>("order-db");
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -39,6 +45,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.MapOrderEndpoints();
+app.MapHealthChecks("/health");
 
 app.Run();
 

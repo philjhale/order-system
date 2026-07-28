@@ -152,6 +152,22 @@ resource "azurerm_container_app" "order_service" {
         name  = "ServiceBus__FullyQualifiedNamespace"
         value = local.servicebus_fully_qualified_namespace
       }
+
+      # /health round-trips to SQL (services/order-service's OrderDbHealthCheck) rather than
+      # just accepting a TCP connection, so a replica whose DB connection is broken (Serverless
+      # auto-pause resume failure, missing contained user, etc.) gets taken out of rotation
+      # instead of serving 500s.
+      liveness_probe {
+        transport = "HTTP"
+        path      = "/health"
+        port      = 8080
+      }
+
+      readiness_probe {
+        transport = "HTTP"
+        path      = "/health"
+        port      = 8080
+      }
     }
   }
 }
