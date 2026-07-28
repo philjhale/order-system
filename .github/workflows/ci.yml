@@ -186,13 +186,18 @@ jobs:
           CONNECTION_STRING="Server=tcp:${SQL_SERVER_FQDN},1433;Database=${SQL_DATABASE_NAME};Authentication=Active Directory Managed Identity;User Id=${IDENTITY_CLIENT_ID};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
 
           # `--env-vars` makes the CLI build a full container override rather than patching just
-          # the env list, so `--image` must be resupplied too — omitting it fails with
-          # "(ContainerAppImageRequired) Container ... must have an 'Image' property specified",
-          # even though the job template already has an image from the targeted apply above.
+          # the env list, so both `--image` and `--command` must be resupplied too — omitting
+          # `--image` fails outright with "(ContainerAppImageRequired) Container ... must have an
+          # 'Image' property specified", but omitting `--command` fails silently: the execution
+          # starts, drops back to the image's default entrypoint (the web server, not `migrate`),
+          # and then just runs forever since the web server never exits, until the wait loop below
+          # times out. The job template's own `command` (Terraform) is never consulted by `job
+          # start`'s override.
           EXECUTION=$(az containerapp job start \
             --name caj-order-service-migrate \
             --resource-group rg-order-system \
             --image "$IMAGE" \
+            --command "dotnet" "OrderSystem.OrderService.dll" "migrate" \
             --env-vars \
               "ConnectionStrings__OrderDb=$CONNECTION_STRING" \
               "Sql__ServerFqdn=$SQL_SERVER_FQDN" \
