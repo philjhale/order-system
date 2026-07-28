@@ -21,3 +21,7 @@ output "managed_identity_name" {
 output "container_app_job_name" {
   value = azurerm_container_app_job.order_service_migrate.name
 }
+
+output "image" {
+  value = local.image
+}
