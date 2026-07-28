@@ -47,3 +47,26 @@ also passes `-var image_tag=<commit-sha>` on `apply` so the Container App
 and migration job point at the image `docker-build-push` just pushed, then
 triggers the migration job and polls it for success before the new Container
 App revision goes live.
+
+## Manual one-time step: Directory Readers role
+
+`azurerm_mssql_server.order_service` has a system-assigned identity so it can
+resolve `CREATE USER ... FROM EXTERNAL PROVIDER` principals against Entra ID
+(needed by the migration job's contained-user provisioning). Without it, the
+server can't look up principals and migrations fail with "Server identity is
+not configured".
+
+That identity also needs the **Directory Readers** Entra ID role, which
+Terraform/CI cannot grant — assigning a directory role requires Privileged
+Role Administrator or Global Administrator, permissions the CI service
+principal doesn't (and shouldn't) have. After `terraform apply` creates or
+recreates this server, a human Entra ID admin must:
+
+1. Get the identity's principal ID: `az sql server show --name
+   sql-order-service --resource-group rg-order-system --query
+   "identity.principalId" -o tsv`
+2. Azure Portal → **Microsoft Entra ID** → **Roles and administrators** →
+   **Directory Readers** → **Add assignments** → search by that principal ID
+   (system-assigned identities usually only show by ID, not name) → add
+
+Done once for the current server on 2026-07-28.
