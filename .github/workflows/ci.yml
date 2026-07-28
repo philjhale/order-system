@@ -182,11 +182,17 @@ jobs:
           SQL_DATABASE_NAME=$(terraform output -raw sql_database_name)
           IDENTITY_CLIENT_ID=$(terraform output -raw managed_identity_client_id)
           IDENTITY_NAME=$(terraform output -raw managed_identity_name)
+          IMAGE=$(terraform output -raw image)
           CONNECTION_STRING="Server=tcp:${SQL_SERVER_FQDN},1433;Database=${SQL_DATABASE_NAME};Authentication=Active Directory Managed Identity;User Id=${IDENTITY_CLIENT_ID};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
 
+          # `--env-vars` makes the CLI build a full container override rather than patching just
+          # the env list, so `--image` must be resupplied too — omitting it fails with
+          # "(ContainerAppImageRequired) Container ... must have an 'Image' property specified",
+          # even though the job template already has an image from the targeted apply above.
           EXECUTION=$(az containerapp job start \
             --name caj-order-service-migrate \
             --resource-group rg-order-system \
+            --image "$IMAGE" \
             --env-vars \
               "ConnectionStrings__OrderDb=$CONNECTION_STRING" \
               "Sql__ServerFqdn=$SQL_SERVER_FQDN" \
