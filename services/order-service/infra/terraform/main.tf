@@ -39,10 +39,13 @@ resource "azurerm_role_assignment" "order_service_servicebus_data_owner" {
 # identity is added as a contained DB user by the
 # migration job (below), not by Terraform, since the GitHub-hosted runner has no network path to
 # the server (firewall only allows Azure services).
+#
+# location is var.sql_location, not local.location (the shared foundation's uksouth) — see
+# variables.tf for why this one resource needs its own region.
 resource "azurerm_mssql_server" "order_service" {
   name                = "sql-order-service"
   resource_group_name = local.resource_group_name
-  location            = local.location
+  location            = var.sql_location
   version             = "12.0"
 
   azuread_administrator {
