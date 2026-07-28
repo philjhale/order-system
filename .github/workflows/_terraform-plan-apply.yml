@@ -11,6 +11,14 @@ on:
         description: '"plan" (PR runs) or "apply" (post-merge runs on main).'
         required: true
         type: string
+      tf-vars:
+        description: >-
+          Extra `-var` arguments appended verbatim to plan/apply, e.g.
+          "-var image_tag=abc123". Optional — most working directories (e.g.
+          shared/) declare no variables.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   id-token: write
@@ -22,6 +30,14 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    # azurerm/azuread providers use ARM_USE_OIDC + the azure/login-issued federated token
+    # rather than a client secret — no long-lived Azure credential is stored anywhere in
+    # this repo or in secrets. Set at job level since every terraform step below needs it.
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,34 +49,16 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # azurerm/azuread providers use ARM_USE_OIDC + the azure/login-issued
-      # federated token rather than a client secret — no long-lived Azure
-      # credential is stored anywhere in this repo or in secrets.
       - name: Terraform init
         run: terraform init
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform validate
         run: terraform validate
 
       - name: Terraform plan
         if: inputs.mode == 'plan'
-        run: terraform plan -input=false
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -input=false ${{ inputs.tf-vars }}
 
       - name: Terraform apply
         if: inputs.mode == 'apply'
-        run: terraform apply -input=false -auto-approve
-        env:
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: terraform apply -input=false -auto-approve ${{ inputs.tf-vars }}

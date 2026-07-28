@@ -4,7 +4,7 @@ using OrderSystem.Messaging;
 namespace OrderSystem.OrderService.Consumers;
 
 /// <summary>
-/// Subscribes Order Service to every event it consumes (task 9) for the lifetime of the
+/// Subscribes Order Service to every event it consumes for the lifetime of the
 /// process. Each delivered message is handled in its own DI scope, so the scoped
 /// OrderDbContext resolved for OrderEventConsumer is never shared across concurrent
 /// deliveries from different sessions (OrderIds).

@@ -55,11 +55,12 @@ terraform {
 }
 ```
 
-## 4. CI identity bootstrap (task 6's app-registration step, done early)
+## 4. CI identity bootstrap
 
-Task 5's Terraform needs the CI app registration's object id (for the SQL
-AAD-admin group membership), so this app registration is created here
-rather than waiting for task 6's number to come up. One-time, manual,
+The shared-foundation Terraform (`infra/terraform/shared/`) needs the CI
+app registration's object id (for the SQL AAD-admin group membership), so
+this app registration is created here, ahead of the rest of that
+config's resources. One-time, manual,
 via `az` — not Terraform, since the app registration and its federated
 credentials must exist before any CI-authenticated `terraform apply` can
 run.
@@ -84,8 +85,8 @@ az ad app federated-credential create --id <app-object-id> --parameters '{
 az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "Contributor" --scope "/subscriptions/<subscription-id>"
 az role assignment create --assignee-object-id <sp-object-id> --assignee-principal-type ServicePrincipal --role "User Access Administrator" --scope "/subscriptions/<subscription-id>"
 
-# ARM roles above cover azurerm_* resources but not azuread_* ones (task
-# 5's sql_admins group/membership) — the azuread Terraform provider talks
+# ARM roles above cover azurerm_* resources but not azuread_* ones (the
+# sql_admins group/membership in infra/terraform/shared) — the azuread Terraform provider talks
 # to Microsoft Graph, which ARM RBAC doesn't reach. Without this, `terraform
 # plan`/`apply` against azuread_group/azuread_group_member fails with a
 # Graph 403 "Insufficient privileges". Tenant-wide (Graph app permissions
@@ -99,7 +100,7 @@ az ad app permission admin-consent --id <app-object-id>
 **Federated credential subject format:** GitHub's OIDC `sub` claim uses
 `repo:<owner>@<owner-id>/<repo>@<repo-id>:...` (ID-qualified), not the
 plain `repo:<owner>/<repo>:...` form shown in most docs/examples — at
-least for this repo (confirmed live in task 6's first CI run, which
+least for this repo (confirmed live in this CI setup's first run, which
 failed OIDC token exchange with `AADSTS700213: No matching federated
 identity record` until the credentials were updated to match). Look up
 the owner/repo numeric IDs with `gh api repos/<owner>/<repo> --jq
@@ -112,13 +113,13 @@ repo, not just a specific branch — combined with `Contributor` +
 `User Access Administrator` at subscription scope on the same principal,
 a malicious or compromised PR that modifies `.github/workflows/**` could
 use these credentials to escalate IAM roles at subscription scope. This
-breadth is required by the plan (every task's PR needs `terraform plan`
-to authenticate, per `tasks/plan.md` task 6) and is an accepted tradeoff
-for this MVP, not an oversight. Mitigate by enabling branch protection
+breadth is required so every PR's `terraform plan` can authenticate, and
+is an accepted tradeoff for this MVP, not an oversight. Mitigate by enabling branch protection
 requiring review on changes to `.github/workflows/**` before merge.
 
 No client secret is created — authentication is OIDC-only via the two
-federated credentials above. Task 6 stores the app (client) ID, tenant ID,
-and subscription ID as GitHub repo secrets/vars for use by
-`azure/login` in CI workflows; task 5's Terraform references this app's
-service-principal object id as a member of the SQL AAD-admin group.
+federated credentials above. The app (client) ID, tenant ID, and
+subscription ID are stored as GitHub repo secrets/vars for use by
+`azure/login` in CI workflows; the shared-foundation Terraform references
+this app's service-principal object id as a member of the SQL AAD-admin
+group.

@@ -14,3 +14,15 @@ Note the start time when beginning a task's `/agent-skills:build` run and
 the end time once its review's critical findings are fixed, then record
 the elapsed time on that task's checklist line in `tasks/todo.md` when
 checking it off.
+
+## No task-number references in code
+
+Never reference `tasks/todo.md`/`tasks/plan.md` task numbers (e.g. "task
+9", "tasks 14/17/19") in code comments, commit-adjacent docs (READMEs,
+`.tf`/`.yml` comments), or other checked-in content outside `tasks/`
+itself. That plan is a planning artifact, not part of the shipped system
+— its numbering will drift or the file may not exist at all once the
+MVP is done, leaving a dangling reference future engineers can't resolve.
+Instead, describe the actual mechanism, file, or resource being referred
+to (e.g. "each service's own Terraform" instead of "tasks 10/14/17/19",
+"the event consumers" instead of "task 9").
