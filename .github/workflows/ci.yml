@@ -150,8 +150,13 @@ jobs:
       # Updates only the migration job's image first, so the migration below runs against the
       # *new* image's EF Core migrations before the Container App (updated in the second apply)
       # starts serving that same image's code against a not-yet-migrated schema.
+      #
+      # The firewall rule is targeted explicitly too — it isn't a dependency of the container app
+      # job resource (Terraform only pulls in a target's own dependencies), so without listing it
+      # here the migration container has no network path to the SQL server at all and fails with
+      # "Client with IP address ... is not allowed to access the server."
       - name: Terraform apply (migration job only)
-        run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -var "image_tag=${{ github.sha }}"
+        run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -target=azurerm_mssql_firewall_rule.allow_azure_services -var "image_tag=${{ github.sha }}"
 
       # Re-authenticate right before fetching the SQL token: the targeted apply above can take
       # long enough (real cross-region SQL server/database provisioning, not just a fast
