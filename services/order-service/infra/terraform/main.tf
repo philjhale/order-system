@@ -48,6 +48,15 @@ resource "azurerm_mssql_server" "order_service" {
   location            = var.sql_location
   version             = "12.0"
 
+  # Required for `CREATE USER ... FROM EXTERNAL PROVIDER` (the migration job's contained-user
+  # provisioning) to resolve a managed identity's principal name against Entra ID — without its
+  # own identity the server can't query the directory and the migration job fails with
+  # "Server identity is not configured". The identity itself also needs the Directory Readers
+  # role granted in Entra ID; that's a one-time manual step (see outputs.tf).
+  identity {
+    type = "SystemAssigned"
+  }
+
   azuread_administrator {
     login_username              = data.terraform_remote_state.shared.outputs.sql_admins_group_display_name
     object_id                   = data.terraform_remote_state.shared.outputs.sql_admins_group_object_id
