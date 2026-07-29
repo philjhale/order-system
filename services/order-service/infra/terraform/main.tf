@@ -200,6 +200,11 @@ resource "azurerm_container_app" "order_service" {
       # the replica's life — unlike liveness/readiness it can't be stretched past Container
       # Apps' 4-minute interval cap to dodge cost, so this is the only shape of DB-touching probe
       # that doesn't keep Serverless SQL billed around the clock.
+      #
+      # Known limitation: once startup succeeds, nothing probes the DB connection again for the
+      # rest of the replica's life — a later break (dropped contained user, transient network
+      # partition) surfaces only as per-request errors, not as readiness pulling the replica out
+      # of rotation. Accepted for this demo/MVP given the cost goal above.
       startup_probe {
         transport = "HTTP"
         path      = "/health/startup"
