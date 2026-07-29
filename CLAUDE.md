@@ -1,28 +1,59 @@
-# Order System MVP — project conventions
+# Order System MVP
 
-## Build → review → fix, every task
+## Why
 
-After `/agent-skills:build` implements a task, always run
-`/agent-skills:review` against that task's diff before marking it done,
-and fix any Critical findings it reports before moving on. Then push the changes and open a pull request.
+Demo distributed order system: Order, Inventory, Payment, and Fulfillment
+services react to each other's events with no central orchestrator, while
+keeping inventory and payment consistent under at-least-once, out-of-order
+event delivery. Full requirements/scope: [docs/SPEC.md](docs/SPEC.md).
 
-## Generation time tracking
+Don't add functionality the spec explicitly defers (Cart, Notifications,
+Search, API Gateway, sagas, auth, refunds, cancellation) — flag it instead
+of building it.
 
-`tasks/todo.md` records, per completed task, the total wall-clock time
-for build + review + critical-finding fixes combined (not build alone).
-Note the start time when beginning a task's `/agent-skills:build` run and
-the end time once its review's critical findings are fixed, then record
-the elapsed time on that task's checklist line in `tasks/todo.md` when
-checking it off.
+## What
 
-## No task-number references in code
+- .NET 10 / C#. Each service (`services/<name>/`) has its own `.sln` and
+  the same internal layout: `src/Api`, `Domain`, `Persistence`,
+  `Messaging`, `Consumers`, `HealthChecks`, `DbMigration`, with a sibling
+  `tests/<Service>.Tests` mirroring `src/`. Put new code in the matching
+  folder.
+- Services talk to each other only via Azure Service Bus events —
+  no direct references across `services/*/src`, `tests`, or
+  `infra/terraform`. Shared code lives in `shared/`.
+- Each service backed by Azure SQL where needed; infra is Terraform,
+  deployed as Azure Container Apps. No local docker-compose stack — see
+  [README.md](README.md#setup) for the Terraform apply order (bootstrap →
+  shared → per-service).
 
-Never reference `tasks/todo.md`/`tasks/plan.md` task numbers (e.g. "task
-9", "tasks 14/17/19") in code comments, commit-adjacent docs (READMEs,
-`.tf`/`.yml` comments), or other checked-in content outside `tasks/`
-itself. That plan is a planning artifact, not part of the shipped system
-— its numbering will drift or the file may not exist at all once the
-MVP is done, leaving a dangling reference future engineers can't resolve.
-Instead, describe the actual mechanism, file, or resource being referred
-to (e.g. "each service's own Terraform" instead of "tasks 10/14/17/19",
-"the event consumers" instead of "task 9").
+## How
+
+```bash
+# shared libraries
+dotnet build shared/OrderSystem.Shared.sln
+dotnet test shared/OrderSystem.Shared.sln
+
+# a service (same pattern for inventory-service, payment-service, fulfillment-service)
+dotnet build services/order-service/OrderSystem.OrderService.sln
+dotnet test services/order-service/OrderSystem.OrderService.sln
+
+# cross-service behaviour
+dotnet test integration-tests/OrderSystem.IntegrationTests.sln
+```
+
+CI (`.github/workflows/ci.yml`) builds/tests only the services a PR
+actually touches, plans Terraform on PRs, and applies + deploys on merge
+to `main`.
+
+Building a new feature/task end-to-end: see
+[agent_docs/build-workflow.md](agent_docs/build-workflow.md).
+
+## Boundaries
+
+- Never commit secrets, connection strings, or `*.tfvars`/`.env` files —
+  Azure SQL and Service Bus credentials come from Terraform outputs and
+  Container App secrets, not checked-in config.
+- Ask before running `terraform apply` locally — infra changes go through
+  the PR → plan → merge → CI-apply flow, not ad hoc applies.
+- Ask before modifying a service's DB schema or adding an EF Core
+  migration (`DbMigration/`) — it affects a live Azure SQL database.
