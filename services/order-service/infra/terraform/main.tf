@@ -97,6 +97,10 @@ resource "azurerm_mssql_database" "order_service" {
   # this region") — Local (LRS) is also the cheaper, adequate choice for this MVP.
   storage_account_type = "Local"
 
+  # Pinned explicitly rather than left to Azure's GP_S_Gen5 default (also 32GB) so the limit
+  # is visible here instead of implicit — storage cost is trivial at this size either way.
+  max_size_gb = 32
+
   lifecycle {
     prevent_destroy = true
   }
@@ -177,14 +181,19 @@ resource "azurerm_container_app" "order_service" {
       # instead of serving 500s.
       liveness_probe {
         transport = "HTTP"
-        path      = "/health"
-        port      = 8080
+        # /health queries SQL (OrderDbHealthCheck). Container Apps' default 10s probe
+        # interval means the database is touched every ~10s around the clock, so it never
+        # gets the auto_pause_delay_in_minutes-long idle gap needed to auto-pause.
+        path = "/health"
+        port = 8080
       }
 
       readiness_probe {
         transport = "HTTP"
-        path      = "/health"
-        port      = 8080
+        # Same /health endpoint, same DB round-trip and auto-pause implication as the
+        # liveness probe above.
+        path = "/health"
+        port = 8080
       }
     }
   }
