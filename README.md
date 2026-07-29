@@ -1,16 +1,11 @@
 # Order System
 
-A demo distributed order system showing a realistic choreography-based,
-event-driven order placement flow, with correct handling of inventory and
-payment consistency. Scoped as a learning/demo project — not a production
-system.
+A demo distributed order system. The purpose is to be a vehicle for practicing AI driven development using [agent-skills](https://github.com/addyosmani/agent-skills) not to be a realistic, perfect example of a distributed system.
 
 Services (Order, Inventory, Payment, Fulfillment) react to each other's
-events with no central orchestrator (no saga coordinator), while keeping
+events with no central orchestrator, while keeping
 inventory and payment state consistent under at-least-once, out-of-order
-event delivery.
-
-Full requirements, scope, data model, and event flow: [docs/SPEC.md](docs/SPEC.md).
+event delivery. Full requirements, scope, data model, and event flow: [docs/SPEC.md](docs/SPEC.md).
 
 ## Setup
 
@@ -41,7 +36,7 @@ dotnet build services/order-service/OrderSystem.OrderService.sln
 dotnet test services/order-service/OrderSystem.OrderService.sln
 ```
 
-Cross-service behavior is covered by
+Cross-service behaviour is covered by
 [integration-tests/OrderSystem.IntegrationTests.sln](integration-tests/OrderSystem.IntegrationTests.sln).
 
 ## CI/CD
