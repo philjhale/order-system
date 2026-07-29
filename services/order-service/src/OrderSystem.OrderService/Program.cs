@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using OrderSystem.OrderService.Api;
 using OrderSystem.OrderService.Consumers;
 using OrderSystem.OrderService.HealthChecks;
@@ -27,9 +28,13 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<OrderEventConsumer>();
 builder.Services.AddHostedService<OrderEventConsumerHostedService>();
 
-// Backs the Container App's liveness/readiness probes (services/order-service/infra/terraform) —
-// round-trips to SQL rather than a bare TCP check, so a not-yet-resumed Serverless DB or missing
-// contained user takes the replica out of rotation instead of serving 500s.
+// Backs the Container App's probes (services/order-service/infra/terraform). Split into two
+// endpoints below rather than one shared /health: liveness/readiness poll continuously for the
+// life of the replica and must stay cheap, while the DB-touching check only needs to run once
+// per replica startup (Container Apps' startup_probe semantics) — Azure Container Apps caps
+// periodic probe intervals at 4 minutes, far too frequent for Serverless SQL to ever accumulate
+// the 60 idle minutes it needs to auto-pause, so the DB check can't be a recurring probe at all
+// without keeping the database billed around the clock.
 builder.Services.AddHealthChecks().AddCheck<OrderDbHealthCheck>("order-db");
 
 var app = builder.Build();
@@ -43,7 +48,17 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.MapOrderEndpoints();
-app.MapHealthChecks("/health");
+
+// Cheap process-alive check — no DB call — used by both liveness_probe and readiness_probe,
+// which poll continuously for the life of the replica.
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+
+// Round-trips to SQL (OrderDbHealthCheck), so a replica whose DB connection is broken at
+// startup (Serverless auto-pause resume failure, missing contained user, etc.) never comes into
+// rotation. Wired to the Container App's startup_probe only — which runs periodically until it
+// succeeds once, then stops for the rest of the replica's life — not to liveness/readiness, so
+// this endpoint doesn't keep touching (and billing) the database after startup.
+app.MapHealthChecks("/health/startup");
 
 app.Run();
 

@@ -175,25 +175,35 @@ resource "azurerm_container_app" "order_service" {
         value = local.servicebus_fully_qualified_namespace
       }
 
-      # /health round-trips to SQL (services/order-service's OrderDbHealthCheck) rather than
-      # just accepting a TCP connection, so a replica whose DB connection is broken (Serverless
-      # auto-pause resume failure, missing contained user, etc.) gets taken out of rotation
-      # instead of serving 500s.
+      # Liveness and readiness both stay on the cheap, no-DB endpoint and poll continuously for
+      # the life of the replica — this is a demo/MVP environment and we don't want to pay for an
+      # always-on SQL Server, and Azure Container Apps caps periodic probe intervals at 4
+      # minutes (far too frequent for Serverless SQL to ever accumulate the 60 idle minutes it
+      # needs to auto-pause), so no recurring probe here is allowed to touch the database — see
+      # startup_probe below for the one that does.
       liveness_probe {
         transport = "HTTP"
-        # /health queries SQL (OrderDbHealthCheck). Container Apps' default 10s probe
-        # interval means the database is touched every ~10s around the clock, so it never
-        # gets the auto_pause_delay_in_minutes-long idle gap needed to auto-pause.
-        path = "/health"
-        port = 8080
+        path      = "/health/live"
+        port      = 8080
       }
 
       readiness_probe {
         transport = "HTTP"
-        # Same /health endpoint, same DB round-trip and auto-pause implication as the
-        # liveness probe above.
-        path = "/health"
-        port = 8080
+        path      = "/health/live"
+        port      = 8080
+      }
+
+      # This is the one probe that round-trips to SQL (services/order-service's
+      # OrderDbHealthCheck), so a replica whose DB connection is broken at startup (Serverless
+      # auto-pause resume failure, missing contained user, etc.) never comes into rotation.
+      # startup_probe runs periodically only until it succeeds once, then stops for the rest of
+      # the replica's life — unlike liveness/readiness it can't be stretched past Container
+      # Apps' 4-minute interval cap to dodge cost, so this is the only shape of DB-touching probe
+      # that doesn't keep Serverless SQL billed around the clock.
+      startup_probe {
+        transport = "HTTP"
+        path      = "/health/startup"
+        port      = 8080
       }
     }
   }
