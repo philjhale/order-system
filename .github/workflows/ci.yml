@@ -155,8 +155,13 @@ jobs:
       # job resource (Terraform only pulls in a target's own dependencies), so without listing it
       # here the migration container has no network path to the SQL server at all and fails with
       # "Client with IP address ... is not allowed to access the server."
+      #
+      # -lock-timeout=5m on both applies below: a PR's order-service-terraform-plan can land on
+      # this same stack's state within seconds of a merge's apply and briefly hold the lock.
+      # Without this, whichever one loses that race fails outright instead of waiting the few
+      # seconds it takes for the other to finish and release it.
       - name: Terraform apply (migration job only)
-        run: terraform apply -input=false -auto-approve -target=azurerm_container_app_job.order_service_migrate -target=azurerm_mssql_firewall_rule.allow_azure_services -var "image_tag=${{ github.sha }}"
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m -target=azurerm_container_app_job.order_service_migrate -target=azurerm_mssql_firewall_rule.allow_azure_services -var "image_tag=${{ github.sha }}"
 
       # Re-authenticate right before fetching the SQL token: the targeted apply above can take
       # long enough (real cross-region SQL server/database provisioning, not just a fast
@@ -230,7 +235,7 @@ jobs:
           exit 1
 
       - name: Terraform apply (full)
-        run: terraform apply -input=false -auto-approve -var "image_tag=${{ github.sha }}"
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m -var "image_tag=${{ github.sha }}"
 
   # Docker build/push and per-service terraform plan/apply jobs are added
   # here, one set of `uses:`/job blocks per service, once that service
