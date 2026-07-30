@@ -28,9 +28,30 @@ resource "azurerm_user_assigned_identity" "order_service" {
   location            = local.location
 }
 
-resource "azurerm_role_assignment" "order_service_servicebus_data_owner" {
-  scope                = data.terraform_remote_state.shared.outputs.servicebus_namespace_id
-  role_definition_name = "Azure Service Bus Data Owner"
+// Send-only, scoped per-topic (not Data Owner at the namespace) — this identity should only be
+// able to publish to the topics Order Service itself owns below, not manage or read every other
+// service's topics too. Receive-side grants for the events Order Service consumes
+// (InventoryReserved/InventoryFailed/InventoryReleased, PaymentCompleted/PaymentFailed,
+// OrderShipped/OrderDelivered — see OrderEventConsumerHostedService) belong in Inventory's,
+// Payment's, and Fulfillment's own Terraform once those services exist, granting this identity
+// (azurerm_user_assigned_identity.order_service.principal_id) Data Receiver on their
+// "order-service" subscription — not here, since Order Service's Terraform doesn't own those
+// topics.
+resource "azurerm_role_assignment" "order_service_servicebus_sender_order_created" {
+  scope                = azurerm_servicebus_topic.order_created.id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_user_assigned_identity.order_service.principal_id
+}
+
+resource "azurerm_role_assignment" "order_service_servicebus_sender_order_cancelled" {
+  scope                = azurerm_servicebus_topic.order_cancelled.id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_user_assigned_identity.order_service.principal_id
+}
+
+resource "azurerm_role_assignment" "order_service_servicebus_sender_order_confirmed" {
+  scope                = azurerm_servicebus_topic.order_confirmed.id
+  role_definition_name = "Azure Service Bus Data Sender"
   principal_id         = azurerm_user_assigned_identity.order_service.principal_id
 }
 

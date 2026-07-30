@@ -22,9 +22,9 @@ of building it.
   no direct references across `services/*/src`, `tests`, or
   `infra/terraform`. Shared code lives in `shared/`.
 - Each service backed by Azure SQL where needed; infra is Terraform,
-  deployed as Azure Container Apps. No local docker-compose stack — see
-  [README.md](README.md#setup) for the Terraform apply order (bootstrap →
-  shared → per-service).
+  deployed as Azure Container Apps. No local docker-compose stack. Terraform
+  conventions (apply order, Service Bus RBAC scoping): see
+  [.claude/rules/terraform.md](.claude/rules/terraform.md).
 
 ## How
 
