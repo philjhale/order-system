@@ -55,10 +55,14 @@ jobs:
       - name: Terraform validate
         run: terraform validate
 
+      # -lock-timeout=5m on both plan and apply below: a PR's plan and a merge's apply can
+      # land on the same stack's state within seconds of each other and briefly collide on
+      # the state lock. Without this, whichever one loses the race fails outright instead
+      # of just waiting the few seconds it takes for the other to finish and release it.
       - name: Terraform plan
         if: inputs.mode == 'plan'
-        run: terraform plan -input=false ${{ inputs.tf-vars }}
+        run: terraform plan -input=false -lock-timeout=5m ${{ inputs.tf-vars }}
 
       - name: Terraform apply
         if: inputs.mode == 'apply'
-        run: terraform apply -input=false -auto-approve ${{ inputs.tf-vars }}
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m ${{ inputs.tf-vars }}
