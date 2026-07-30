@@ -196,6 +196,15 @@ resource "azurerm_container_app" "order_service" {
         value = local.servicebus_fully_qualified_namespace
       }
 
+      # Disambiguates which of this Container App's two attached user-assigned identities
+      # (this one vs. the shared ACR-pull identity) DefaultAzureCredential should authenticate
+      # as for Service Bus — without it, the managed-identity endpoint has no default to fall
+      # back to and token acquisition fails with "Unable to load the proper Managed Identity".
+      env {
+        name  = "ServiceBus__ManagedIdentityClientId"
+        value = azurerm_user_assigned_identity.order_service.client_id
+      }
+
       # Liveness and readiness both stay on the cheap, no-DB endpoint and poll continuously for
       # the life of the replica — this is a demo/MVP environment and we don't want to pay for an
       # always-on SQL Server, and Azure Container Apps caps periodic probe intervals at 4

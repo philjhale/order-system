@@ -22,7 +22,9 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddOrderDbContext(GetOrderDbConnectionString(builder.Configuration));
 
-builder.Services.AddEventPublisher(builder.Configuration["ServiceBus:FullyQualifiedNamespace"]);
+builder.Services.AddEventPublisher(
+    builder.Configuration["ServiceBus:FullyQualifiedNamespace"],
+    builder.Configuration["ServiceBus:ManagedIdentityClientId"]);
 builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Services.AddScoped<OrderEventConsumer>();
