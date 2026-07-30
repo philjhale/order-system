@@ -7,6 +7,12 @@ on:
         description: Terraform root module to run against, relative to repo root.
         required: true
         type: string
+      stack-name:
+        description: >-
+          Short unique id for this root module (e.g. "shared", "order-service").
+          Used as the plan-artifact name and the stack label in the PR plan report.
+        required: true
+        type: string
       mode:
         description: '"plan" (PR runs) or "apply" (post-merge runs on main).'
         required: true
@@ -55,9 +61,31 @@ jobs:
       - name: Terraform validate
         run: terraform validate
 
+      # `set -e` (bash's default for run: steps) plus pipefail means a failing `terraform
+      # plan` still stops this step right after tee has written plan.txt but before the
+      # `terraform show` line runs — plan.json just won't exist. The metadata/upload steps
+      # below run on `always()` so the report action still gets the error output.
       - name: Terraform plan
         if: inputs.mode == 'plan'
-        run: terraform plan -input=false ${{ inputs.tf-vars }}
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -out plan.tfplan ${{ inputs.tf-vars }} 2>&1 | tee plan.txt
+          terraform show -json plan.tfplan > plan.json
+
+      - name: Write plan metadata
+        if: always() && inputs.mode == 'plan'
+        run: |
+          jq -n --arg stack "${{ inputs.stack-name }}" '{ stack: $stack }' > meta.json
+
+      - name: Upload plan artifact
+        if: always() && inputs.mode == 'plan'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-plan-${{ inputs.stack-name }}
+          path: |
+            ${{ inputs.working-directory }}/plan.txt
+            ${{ inputs.working-directory }}/plan.json
+            ${{ inputs.working-directory }}/meta.json
 
       - name: Terraform apply
         if: inputs.mode == 'apply'
