@@ -2,12 +2,6 @@ resource "azurerm_resource_group" "shared" {
   name     = "rg-order-system"
   location = var.location
 
-  # Minor, non-destructive tag added to exercise the terraform-plan-report-action
-  # PR comment (in-place update, no destroy/replace).
-  tags = {
-    managed_by = "terraform"
-  }
-
   # Every service's Terraform depends on this resource group via
   # terraform_remote_state — an accidental destroy here cascades to all
   # four services at once.
