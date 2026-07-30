@@ -22,17 +22,9 @@ of building it.
   no direct references across `services/*/src`, `tests`, or
   `infra/terraform`. Shared code lives in `shared/`.
 - Each service backed by Azure SQL where needed; infra is Terraform,
-  deployed as Azure Container Apps. No local docker-compose stack — see
-  [README.md](README.md#setup) for the Terraform apply order (bootstrap →
-  shared → per-service).
-- Service Bus RBAC is scoped per-topic, never namespace-wide: grant a
-  service's managed identity `Azure Service Bus Data Sender` only on the
-  topics it publishes (in that service's own Terraform), and
-  `Azure Service Bus Data Receiver` only on the subscription it consumes
-  (granted in the Terraform of whichever service owns that topic). Never
-  use `Azure Service Bus Data Owner` — with no central orchestrator,
-  topic-level RBAC is the only boundary preventing one compromised
-  service from forging or destroying another's events.
+  deployed as Azure Container Apps. No local docker-compose stack. Terraform
+  conventions (apply order, Service Bus RBAC scoping): see
+  [.claude/rules/terraform.md](.claude/rules/terraform.md).
 
 ## How
 
