@@ -60,6 +60,7 @@ jobs:
     uses: ./.github/workflows/_terraform-plan-apply.yml
     with:
       working-directory: infra/terraform/shared
+      stack-name: shared
       mode: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
 
   order-service-build-test:
@@ -109,6 +110,7 @@ jobs:
     uses: ./.github/workflows/_terraform-plan-apply.yml
     with:
       working-directory: services/order-service/infra/terraform
+      stack-name: order-service
       mode: plan
       tf-vars: -var image_tag=${{ github.sha }}
 
@@ -236,6 +238,28 @@ jobs:
 
       - name: Terraform apply (full)
         run: terraform apply -input=false -auto-approve -lock-timeout=5m -var "image_tag=${{ github.sha }}"
+
+  # Consolidates every terraform-*-plan job's uploaded plan/plan.json into one sticky PR
+  # comment instead of one comment per stack. `always()` so a stack whose plan step failed
+  # still gets reported rather than silently dropping the report job; `needs` only lists the
+  # plan-producing jobs, so a job skipped by `changes` filtering just contributes no artifact.
+  terraform-plan-report:
+    needs: [terraform-shared, order-service-terraform-plan]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tf-plan-*
+          path: plans
+          merge-multiple: false
+
+      - uses: MewsSystems/terraform-plan-report-action@v1
+        with:
+          plans-dir: plans
 
   # Docker build/push and per-service terraform plan/apply jobs are added
   # here, one set of `uses:`/job blocks per service, once that service
