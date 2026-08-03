@@ -17,9 +17,9 @@ on:
         type: string
       image-tag:
         description: >-
-          Content-based tag for this build (e.g. the last commit that touched the service's
-          inputs), not github.sha — keeps the tag, and anything keyed on it (terraform diffs,
-          redeploys), stable across commits that don't actually change this image.
+          Content-based tag for this build, computed by the caller — not github.sha — so the
+          tag, and anything keyed on it (terraform diffs, redeploys), stays stable across
+          commits that don't actually change this image.
         required: true
         type: string
       registry-name:
