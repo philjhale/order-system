@@ -47,7 +47,7 @@ jobs:
       # rebuild isn't strictly guaranteed to reproduce byte-identical content. Picking up a base
       # image security patch is intentionally decoupled from this tag's job (content freshness);
       # revisit with a scheduled rebuild if that patch lag becomes a problem in practice.
-      order-service-image-tag: ${{ hashFiles('services/order-service/**', 'shared/**', 'Directory.Build.props', '.editorconfig') }}
+      order-service-image-tag: ${{ steps.order-service-image-tag.outputs.tag }}
     steps:
       # paths-filter needs full history to diff push events against
       # github.event.before; a shallow (default depth-1) checkout can't.
@@ -71,6 +71,13 @@ jobs:
               - 'services/payment-service/**'
             fulfillment-service-only:
               - 'services/fulfillment-service/**'
+
+      # hashFiles() can't be evaluated directly inside a job-level `outputs:` mapping
+      # (that context has no runner to hash against) — it has to run inside a step,
+      # with the result threaded out via GITHUB_OUTPUT for the job output above.
+      - name: Compute order-service image tag
+        id: order-service-image-tag
+        run: echo "tag=${{ hashFiles('services/order-service/**', 'shared/**', 'Directory.Build.props', '.editorconfig') }}" >> "$GITHUB_OUTPUT"
 
   shared-build-test:
     uses: ./.github/workflows/_dotnet-build-test.yml
