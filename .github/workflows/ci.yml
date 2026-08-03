@@ -27,6 +27,13 @@ jobs:
       inventory-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.inventory-service-only == 'true' }}
       payment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.payment-service-only == 'true' }}
       fulfillment-service: ${{ steps.filter.outputs.shared == 'true' || steps.filter.outputs.fulfillment-service-only == 'true' }}
+      # Content-based, not github.sha: github.sha changes on every commit, so a build/deploy
+      # keyed on it treats a CI-workflow-only or other unrelated-to-this-service commit as a new
+      # image, producing a phantom terraform diff (plan) or a bit-identical redeploy (apply) even
+      # though nothing this service's image actually depends on changed. Keying on the last commit
+      # that touched the service's own inputs makes the tag — and therefore the terraform diff —
+      # change only when the built image's content actually would.
+      order-service-image-tag: ${{ steps.tag.outputs.order-service }}
     steps:
       # paths-filter needs full history to diff push events against
       # github.event.before; a shallow (default depth-1) checkout can't.
@@ -50,6 +57,15 @@ jobs:
               - 'services/payment-service/**'
             fulfillment-service-only:
               - 'services/fulfillment-service/**'
+
+      # One tag per service, derived from the paths that actually feed its Docker image —
+      # its own folder plus the shared/ code and root build config it references. `git log -1`
+      # against those paths (not `git rev-parse HEAD`) is what makes this content-based rather
+      # than commit-based: it only advances when one of those paths' content actually changed.
+      - name: Compute content-based image tags
+        id: tag
+        run: |
+          echo "order-service=$(git log -1 --format=%H -- services/order-service shared Directory.Build.props)" >> "$GITHUB_OUTPUT"
 
   shared-build-test:
     uses: ./.github/workflows/_dotnet-build-test.yml
@@ -99,6 +115,7 @@ jobs:
       dockerfile-path: services/order-service/Dockerfile
       context-path: .
       registry-name: acrordersystem01
+      image-tag: ${{ needs.changes.outputs.order-service-image-tag }}
       push: ${{ github.event_name != 'pull_request' }}
 
   # PR runs only get a plan (no image has been pushed yet to actually deploy) — the real
@@ -110,7 +127,7 @@ jobs:
     with:
       working-directory: services/order-service/infra/terraform
       mode: plan
-      tf-vars: -var image_tag=${{ github.sha }}
+      tf-vars: -var image_tag=${{ needs.changes.outputs.order-service-image-tag }}
 
   # Not expressed as a call into _terraform-plan-apply.yml: unlike shared/, this apply has to be
   # staged in two passes around the migration job, which the generic reusable workflow doesn't
@@ -161,7 +178,7 @@ jobs:
       # Without this, whichever one loses that race fails outright instead of waiting the few
       # seconds it takes for the other to finish and release it.
       - name: Terraform apply (migration job only)
-        run: terraform apply -input=false -auto-approve -lock-timeout=5m -target=azurerm_container_app_job.order_service_migrate -target=azurerm_mssql_firewall_rule.allow_azure_services -var "image_tag=${{ github.sha }}"
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m -target=azurerm_container_app_job.order_service_migrate -target=azurerm_mssql_firewall_rule.allow_azure_services -var "image_tag=${{ needs.changes.outputs.order-service-image-tag }}"
 
       # Re-authenticate right before fetching the SQL token: the targeted apply above can take
       # long enough (real cross-region SQL server/database provisioning, not just a fast
@@ -235,7 +252,7 @@ jobs:
           exit 1
 
       - name: Terraform apply (full)
-        run: terraform apply -input=false -auto-approve -lock-timeout=5m -var "image_tag=${{ github.sha }}"
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m -var "image_tag=${{ needs.changes.outputs.order-service-image-tag }}"
 
   # Docker build/push and per-service terraform plan/apply jobs are added
   # here, one set of `uses:`/job blocks per service, once that service
