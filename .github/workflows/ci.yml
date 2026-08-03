@@ -30,10 +30,24 @@ jobs:
       # Content-based, not github.sha: github.sha changes on every commit, so a build/deploy
       # keyed on it treats a CI-workflow-only or other unrelated-to-this-service commit as a new
       # image, producing a phantom terraform diff (plan) or a bit-identical redeploy (apply) even
-      # though nothing this service's image actually depends on changed. Keying on the last commit
-      # that touched the service's own inputs makes the tag — and therefore the terraform diff —
-      # change only when the built image's content actually would.
-      order-service-image-tag: ${{ steps.tag.outputs.order-service }}
+      # though nothing this service's image actually depends on changed. hashFiles() hashes the
+      # actual current content of these paths — the same non-workflow paths the `shared` filter
+      # above uses to decide this job should even run, kept in sync with it deliberately so a path
+      # that triggers a rebuild always also moves the tag — so the tag, and anything keyed on it,
+      # only changes when the built image's content actually would. Unlike a commit hash (whether
+      # github.sha or `git log -1`), it's stable across squash-merges: a squashed commit on main
+      # gets a new SHA even when the tree it produces is byte-identical to the PR branch tip, which
+      # would make a PR's plan and the post-merge apply show different tags for the same content.
+      #
+      # Deliberately excludes `.github/workflows/**` even though the `shared` filter includes it:
+      # workflow YAML controls how the image is built, not what's in it. A workflow-only commit
+      # still triggers a rebuild+push (via the `shared`-gated jobs downstream), but under the
+      # unchanged tag — which is a real, accepted trade-off since the service's floating base
+      # images (mcr.microsoft.com/dotnet/sdk:10.0, aspnet:10.0 — see the Dockerfile) mean that
+      # rebuild isn't strictly guaranteed to reproduce byte-identical content. Picking up a base
+      # image security patch is intentionally decoupled from this tag's job (content freshness);
+      # revisit with a scheduled rebuild if that patch lag becomes a problem in practice.
+      order-service-image-tag: ${{ hashFiles('services/order-service/**', 'shared/**', 'Directory.Build.props', '.editorconfig') }}
     steps:
       # paths-filter needs full history to diff push events against
       # github.event.before; a shallow (default depth-1) checkout can't.
@@ -57,38 +71,6 @@ jobs:
               - 'services/payment-service/**'
             fulfillment-service-only:
               - 'services/fulfillment-service/**'
-
-      # One tag per service, derived from the paths that actually feed its Docker image: its own
-      # folder, the shared/ code it references, and the root build config (Directory.Build.props,
-      # .editorconfig) that affects how both compile — the same non-workflow paths the `shared`
-      # filter above uses to decide this job should even run, kept in sync with it deliberately so
-      # a path that triggers a rebuild always also moves the tag.
-      #
-      # `git rev-parse HEAD:<path>` (a tree/blob object hash) rather than `git log -1 --format=%H`
-      # (a commit hash): a commit hash still drifts on an ordinary squash-merge — the squashed
-      # commit on main gets a new SHA even when the tree it produces is byte-identical to the PR
-      # branch tip, so the PR's plan and the post-merge apply would show different tags for the
-      # same content. The tree/blob hash is a pure function of content, invariant to how or when
-      # that content was committed.
-      #
-      # Deliberately excludes `.github/workflows/**` even though the `shared` filter includes it:
-      # workflow YAML controls how the image is built, not what's in it. A workflow-only commit
-      # still triggers a rebuild+push (via the `shared`-gated jobs downstream), but under the
-      # unchanged tag — which is a real, accepted trade-off since the service's floating base
-      # images (mcr.microsoft.com/dotnet/sdk:10.0, aspnet:10.0 — see the Dockerfile) mean that
-      # rebuild isn't strictly guaranteed to reproduce byte-identical content. Picking up a base
-      # image security patch is intentionally decoupled from this tag's job (content freshness);
-      # revisit with a scheduled rebuild if that patch lag becomes a problem in practice.
-      - name: Compute content-based image tags
-        id: tag
-        run: |
-          ORDER_SERVICE_HASH=$( { \
-            git rev-parse HEAD:services/order-service; \
-            git rev-parse HEAD:shared; \
-            git rev-parse HEAD:Directory.Build.props; \
-            git rev-parse HEAD:.editorconfig; \
-          } | sha256sum | cut -d' ' -f1 | cut -c1-16)
-          echo "order-service=$ORDER_SERVICE_HASH" >> "$GITHUB_OUTPUT"
 
   shared-build-test:
     uses: ./.github/workflows/_dotnet-build-test.yml
