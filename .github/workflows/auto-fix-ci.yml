@@ -1,0 +1,52 @@
+name: Auto-fix CI
+
+# Watches the CI workflow (ci.yml) rather than being folded into it: a
+# workflow_run trigger always executes with base-repo token permissions,
+# even for a run that originated from a pull_request event — which is what
+# lets this push a fix commit back to a PR branch.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  fix:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      # A pull_request-triggered failure gets fixed on its own branch (the
+      # existing PR just picks up the new commit and CI re-runs). A
+      # push-to-main failure never gets a direct push to main — the
+      # ci-fixer agent is instructed to open a new PR instead, since a
+      # main-branch CI failure can mean a live Terraform apply / DB
+      # migration went wrong, which needs review before retrying.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_branch || 'main' }}
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            GitHub Actions run ${{ github.event.workflow_run.html_url }}
+            (workflow "CI", run id ${{ github.event.workflow_run.id }})
+            failed, triggered by a ${{ github.event.workflow_run.event }}
+            event on branch ${{ github.event.workflow_run.head_branch }}.
+
+            Use the ci-fixer agent to investigate and fix it.
+
+            - If this run was triggered by a pull_request event: commit and
+              push the fix directly to the current branch
+              (${{ github.event.workflow_run.head_branch }}).
+            - If this run was triggered by a push to main: create a new
+              branch off the current checkout, commit the fix there, push
+              it, and open a pull request against main with `gh pr create`
+              explaining what failed and what you changed. Do not push
+              directly to main.
+          claude_args: "--max-turns 30"

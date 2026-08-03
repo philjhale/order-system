@@ -1,11 +1,19 @@
 # CI/CD workflows
 
-`ci.yml` is the single top-level orchestrating workflow, triggered on every
-PR and every push to `main`. It's the only independently-triggered
-workflow file — everything else here is a reusable (`workflow_call`)
-template invoked as a job within it, so cross-job `needs:` ordering (e.g.
-a later phase's service depending on another service's `terraform apply`)
-is always available within one workflow run.
+`ci.yml` is the top-level orchestrating workflow, triggered on every PR and
+every push to `main`. Everything else here except `auto-fix-ci.yml` is a
+reusable (`workflow_call`) template invoked as a job within it, so
+cross-job `needs:` ordering (e.g. a later phase's service depending on
+another service's `terraform apply`) is always available within one
+workflow run.
+
+`auto-fix-ci.yml` is the other independently-triggered workflow: a
+`workflow_run` watcher on `ci.yml` that, on failure, hands the run to the
+`ci-fixer` subagent ([.claude/agents/ci-fixer.md](../../.claude/agents/ci-fixer.md))
+to investigate and fix. A PR-triggered failure gets its fix pushed to the
+same branch; a post-merge failure on `main` (which can mean a live
+Terraform apply or DB migration went wrong) never gets a direct push —
+the agent opens a new PR instead, so it's reviewed before retrying.
 
 - `_dotnet-build-test.yml` — `dotnet restore`/`build`/`test` against a
   given `.sln`.
