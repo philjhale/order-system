@@ -15,6 +15,13 @@ on:
         description: Docker build context, relative to repo root.
         required: true
         type: string
+      image-tag:
+        description: >-
+          Content-based tag for this build, computed by the caller — not github.sha — so the
+          tag, and anything keyed on it (terraform diffs, redeploys), stays stable across
+          commits that don't actually change this image.
+        required: true
+        type: string
       registry-name:
         description: Shared ACR registry name (not the login server), e.g. acrordersystem01.
         required: true
@@ -54,7 +61,7 @@ jobs:
         run: |
           docker build \
             -f "${{ inputs.dockerfile-path }}" \
-            -t "$LOGIN_SERVER/${{ inputs.service-name }}:${{ github.sha }}" \
+            -t "$LOGIN_SERVER/${{ inputs.service-name }}:${{ inputs.image-tag }}" \
             -t "$LOGIN_SERVER/${{ inputs.service-name }}:latest" \
             "${{ inputs.context-path }}"
 
@@ -63,5 +70,5 @@ jobs:
         env:
           LOGIN_SERVER: ${{ inputs.registry-name }}.azurecr.io
         run: |
-          docker push "$LOGIN_SERVER/${{ inputs.service-name }}:${{ github.sha }}"
+          docker push "$LOGIN_SERVER/${{ inputs.service-name }}:${{ inputs.image-tag }}"
           docker push "$LOGIN_SERVER/${{ inputs.service-name }}:latest"
