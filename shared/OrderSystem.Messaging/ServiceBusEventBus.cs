@@ -26,7 +26,9 @@ public sealed class ServiceBusEventBus : IEventPublisher, IEventSubscriber, IAsy
     public ServiceBusEventBus(ServiceBusEventBusOptions options)
     {
         _options = options;
-        _client = new ServiceBusClient(options.FullyQualifiedNamespace, new DefaultAzureCredential());
+        var credential = new DefaultAzureCredential(
+            new DefaultAzureCredentialOptions { ManagedIdentityClientId = options.ManagedIdentityClientId });
+        _client = new ServiceBusClient(options.FullyQualifiedNamespace, credential);
     }
 
     public async Task PublishAsync<TEvent>(TEvent @event, CancellationToken cancellationToken = default)

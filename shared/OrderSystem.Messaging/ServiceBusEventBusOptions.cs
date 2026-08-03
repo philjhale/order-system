@@ -6,6 +6,15 @@ public sealed class ServiceBusEventBusOptions
     public required string FullyQualifiedNamespace { get; init; }
 
     /// <summary>
+    /// Client id of this service's own user-assigned managed identity. Required whenever the
+    /// host has more than one user-assigned identity attached (e.g. an ACR-pull identity
+    /// alongside this service's own) — without it, DefaultAzureCredential's managed-identity
+    /// probe has no way to pick which identity to authenticate as and fails with
+    /// "Unable to load the proper Managed Identity".
+    /// </summary>
+    public string? ManagedIdentityClientId { get; init; }
+
+    /// <summary>
     /// How far in the future an abandoned message's redelivery is scheduled. Service
     /// Bus's own Abandon redelivers instantly, which would spin-loop a
     /// precondition-not-yet-met consumer (see IEventSubscriber); this implementation
