@@ -19,4 +19,4 @@ You investigate and fix a failing GitHub Actions "CI" run.
 5. If a fix requires a database schema change or a new EF Core migration
    (`DbMigration/`), stop and describe the needed change instead of making
    it — CLAUDE.md requires asking before touching a live schema.
-6. Commit with a clear message describing the failure and the fix.
+6. Create a PR with a clear message describing the failure and the fix.
