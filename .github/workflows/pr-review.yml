@@ -1,0 +1,65 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  # The pull_request event payload doesn't carry the head commit message
+  # (unlike workflow_run's head_commit.message), so this job fetches it via
+  # the API to check for the [auto-review] marker before spending a run on
+  # the agent — that marker is what stops the agent's own fix-commit push
+  # from re-triggering this workflow on itself.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          msg=$(gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }} --jq .commit.message)
+          if [[ "$msg" == "[auto-review]"* ]]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  review:
+    needs: guard
+    # head_repository.full_name check excludes fork PRs: a fork's branch
+    # doesn't exist in this repo to push fixes to, and its diff isn't
+    # trusted input for a write-capable agent (same rationale as
+    # auto-fix-ci.yml's fork exclusion).
+    if: >
+      needs.guard.outputs.proceed == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      # claude-code-action exchanges a GitHub OIDC token as part of its
+      # auth flow; without this the token request 404s before the action
+      # can even start ("Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env
+      # variable").
+      id-token: write
+    concurrency:
+      # A newer push supersedes an in-progress review of a now-stale diff.
+      group: pr-review-${{ github.event.pull_request.head.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@2e73e92cab539244e5b922807a184ce24ad5a5cc # v1.0.185
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }}
+            (branch ${{ github.event.pull_request.head.ref }}) using the
+            pr-reviewer agent.
+          claude_args: "--max-turns 30"
