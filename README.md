@@ -44,6 +44,34 @@ Cross-service behaviour is covered by
 PRs and pushes to `main` run through a single GitHub Actions workflow,
 [.github/workflows/ci.yml](.github/workflows/ci.yml), which builds/tests each
 changed service, `terraform plan`s on PRs, and `terraform apply`s +
-deploys on merge to `main`. See
-[.github/workflows/README.md](.github/workflows/README.md) for how the
-reusable build/test, Docker, and Terraform jobs fit together.
+deploys on merge to `main`. A second, independently-triggered workflow,
+[.github/workflows/auto-fix-ci.yml](.github/workflows/auto-fix-ci.yml),
+watches `ci.yml` and investigates/fixes failures automatically. See
+[.github/workflows/README.md](.github/workflows/README.md) for how all of
+these fit together.
+
+### Repository secrets
+
+Azure access uses OIDC (no stored credential) and repo *variables*
+(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` — see
+[.github/workflows/README.md](.github/workflows/README.md)), so those
+aren't secrets. The one actual repository secret this project needs:
+
+- **`CLAUDE_CODE_OAUTH_TOKEN`** — used by `auto-fix-ci.yml` to run
+  `anthropics/claude-code-action` under a Claude subscription (Pro, Max,
+  Team, or Enterprise) rather than a pay-per-token API key. Generate it
+  locally, then add it under repo Settings → Secrets and variables →
+  Actions:
+
+  ```bash
+  claude setup-token
+  ```
+
+  This opens a browser login against your Claude subscription and prints
+  a long-lived OAuth token. It can expire or be invalidated if you log
+  out of Claude elsewhere, in which case re-run the command and update
+  the secret.
+
+  `auto-fix-ci.yml` also requires the
+  [Claude GitHub App](https://github.com/apps/claude) to be installed on
+  this repository (Contents, Issues, and Pull requests: read & write).

@@ -14,10 +14,21 @@ permissions:
   pull-requests: write
   actions: read
 
+concurrency:
+  # One in-flight fix attempt per branch. A second workflow_run for the
+  # same branch (e.g. the fix commit itself fails CI again) queues behind
+  # this rather than running concurrently with an agent already editing
+  # the same checkout.
+  group: auto-fix-ci-${{ github.event.workflow_run.head_branch }}
+
 jobs:
   fix:
-    if: github.event.workflow_run.conclusion == 'failure'
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !contains(github.event.workflow_run.head_commit.message, '[auto-fix]')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # A pull_request-triggered failure gets fixed on its own branch (the
       # existing PR just picks up the new commit and CI re-runs). A
@@ -25,12 +36,19 @@ jobs:
       # ci-fixer agent is instructed to open a new PR instead, since a
       # main-branch CI failure can mean a live Terraform apply / DB
       # migration went wrong, which needs review before retrying.
-      - uses: actions/checkout@v4
+      #
+      # head_repository.full_name == github.repository above also rules
+      # out fork PRs: for those, head_branch names a branch that only
+      # exists in the fork, so checking it out against this repo would
+      # either pick up an unrelated same-named branch or fail outright —
+      # and a fork PR's contents/CI logs aren't trusted input for a
+      # write-capable agent.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_branch || 'main' }}
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@2e73e92cab539244e5b922807a184ce24ad5a5cc # v1.0.185
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -43,10 +61,12 @@ jobs:
 
             - If this run was triggered by a pull_request event: commit and
               push the fix directly to the current branch
-              (${{ github.event.workflow_run.head_branch }}).
+              (${{ github.event.workflow_run.head_branch }}). Prefix the
+              commit message with "[auto-fix]" so this workflow doesn't
+              re-trigger itself on its own commit.
             - If this run was triggered by a push to main: create a new
-              branch off the current checkout, commit the fix there, push
-              it, and open a pull request against main with `gh pr create`
-              explaining what failed and what you changed. Do not push
-              directly to main.
+              branch off the current checkout, commit the fix there
+              (also prefixed "[auto-fix]"), push it, and open a pull
+              request against main with `gh pr create` explaining what
+              failed and what you changed. Do not push directly to main.
           claude_args: "--max-turns 30"
