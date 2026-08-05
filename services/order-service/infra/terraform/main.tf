@@ -83,12 +83,6 @@ resource "azurerm_mssql_server" "order_service" {
     object_id                   = data.terraform_remote_state.shared.outputs.sql_admins_group_object_id
     azuread_authentication_only = true
   }
-
-  # Losing this server means losing every order ever placed — not recoverable from Terraform
-  # state alone.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 # Deliberately broad (any Azure-hosted resource, not just this service's own Container App or
@@ -121,10 +115,6 @@ resource "azurerm_mssql_database" "order_service" {
   # Pinned explicitly rather than left to Azure's GP_S_Gen5 default (also 32GB) so the limit
   # is visible here instead of implicit — storage cost is trivial at this size either way.
   max_size_gb = 32
-
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 # Owned by Order Service — Inventory/Payment/Fulfillment's own subscriptions to these are added
