@@ -11,7 +11,12 @@ event delivery. Full requirements, scope, data model, and event flow: [docs/SPEC
 
 There's no local docker-compose stack — each service runs as an Azure
 Container App, provisioned by Terraform, backed by Service Bus and (where
-needed) Azure SQL. Infra is applied in order:
+needed) Azure SQL.
+
+### Deploying
+
+Each config depends on the previous one's remote state, so apply in this
+order:
 
 1. [infra/terraform-bootstrap](infra/terraform-bootstrap/README.md) — one-time,
    manual. Creates the Terraform remote-state backend and the CI app
@@ -22,6 +27,51 @@ needed) Azure SQL. Infra is applied in order:
 3. Each `services/<name>/infra/terraform/` — per-service resources (Container
    App, SQL server/DB where applicable), reading step 2's outputs via remote
    state.
+
+Each config is applied the same way, e.g. for the shared foundation:
+
+```bash
+cd infra/terraform/shared
+terraform init
+terraform plan
+terraform apply
+```
+
+Once `shared` is applied, do the same in each `services/<name>/infra/terraform/`
+you want running. See each directory's own README for what it creates and
+any manual one-time steps (e.g. order-service's Directory Readers role
+grant).
+
+In CI, `shared` and each touched service apply automatically on merge to
+`main` (see [CI/CD](#cicd) below) — the steps above are for a local/manual
+deploy.
+
+### Destroying
+
+Tear down in the reverse order of apply, since each config depends on the
+one before it via `terraform_remote_state`:
+
+```bash
+# 1. each service you deployed, e.g.:
+cd services/order-service/infra/terraform
+terraform destroy
+
+# 2. the shared foundation, once no service still depends on it
+cd infra/terraform/shared
+terraform destroy
+
+# 3. terraform-bootstrap — only if tearing down entirely; this holds the
+# remote-state backend every other config's `terraform init` needs, so
+# leave it in place if you intend to redeploy later
+cd infra/terraform-bootstrap
+terraform destroy
+```
+
+No resource in this repo's Terraform has `prevent_destroy` or other
+destroy protection — this is a demo environment with no durable data, and
+the whole point is that it can be spun up and torn down freely with no
+lingering cost. `terraform destroy` in each directory should complete
+without manual intervention beyond confirming the prompt.
 
 ## Running / building locally
 

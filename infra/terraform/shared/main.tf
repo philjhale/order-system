@@ -1,13 +1,6 @@
 resource "azurerm_resource_group" "shared" {
   name     = "rg-order-system"
   location = var.location
-
-  # Every service's Terraform depends on this resource group via
-  # terraform_remote_state — an accidental destroy here cascades to all
-  # four services at once.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "azurerm_container_app_environment" "shared" {
@@ -41,13 +34,6 @@ resource "azurerm_servicebus_namespace" "shared" {
   # from each service's Container App / GitHub-hosted CI runners, none
   # with a stable IP.
   public_network_access_enabled = true
-
-  # Every service's Terraform depends on this namespace via
-  # terraform_remote_state — an accidental destroy here cascades to all
-  # four services at once.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 # Shared across all 4 services' Container Apps (attached per-app, not
@@ -76,13 +62,6 @@ resource "azurerm_container_registry" "shared" {
   # push, none with a stable IP — same rationale as the Service Bus
   # namespace above.
   public_network_access_enabled = true
-
-  # Every service's Terraform depends on this registry via
-  # terraform_remote_state — an accidental destroy here cascades to all
-  # four services at once.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "azurerm_role_assignment" "acr_pull" {
