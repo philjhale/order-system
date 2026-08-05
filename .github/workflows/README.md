@@ -1,19 +1,33 @@
 # CI/CD workflows
 
 `ci.yml` is the top-level orchestrating workflow, triggered on every PR and
-every push to `main`. Everything else here except `auto-fix-ci.yml` is a
-reusable (`workflow_call`) template invoked as a job within it, so
-cross-job `needs:` ordering (e.g. a later phase's service depending on
-another service's `terraform apply`) is always available within one
-workflow run.
+every push to `main`. Everything else here except `auto-fix-ci.yml` and
+`pr-review.yml` is a reusable (`workflow_call`) template invoked as a job
+within it, so cross-job `needs:` ordering (e.g. a later phase's service
+depending on another service's `terraform apply`) is always available
+within one workflow run.
 
-`auto-fix-ci.yml` is the other independently-triggered workflow: a
+`auto-fix-ci.yml` is another independently-triggered workflow: a
 `workflow_run` watcher on `ci.yml` that, on failure, hands the run to the
 `ci-fixer` subagent ([.claude/agents/ci-fixer.md](../../.claude/agents/ci-fixer.md))
 to investigate and fix. A PR-triggered failure gets its fix pushed to the
 same branch; a post-merge failure on `main` (which can mean a live
 Terraform apply or DB migration went wrong) never gets a direct push —
 the agent opens a new PR instead, so it's reviewed before retrying.
+
+`pr-review.yml` is the third independently-triggered workflow: on every
+PR opened/synchronized/reopened, it hands the diff to the `pr-reviewer`
+subagent ([.claude/agents/pr-reviewer.md](../../.claude/agents/pr-reviewer.md)),
+adapted from addy-osmani/agent-skills' `code-review-and-quality` skill.
+Critical and Important findings are fixed and pushed directly to the PR
+branch as an `[auto-review]`-prefixed commit (that prefix is also the
+loop-guard that stops the workflow reviewing its own commit); Suggestions
+are left as comments only. `infra/terraform/**` and
+`services/*/src/*/DbMigration/**` are excluded from auto-fix even for
+Critical/Important findings — those get reported in the PR comment
+instead, matching this repo's existing rule (`CLAUDE.md`, `ci-fixer.md`)
+that Terraform and DB-schema changes need human review, not an autonomous
+push. Fork PRs are skipped, same as `auto-fix-ci.yml`.
 
 - `_dotnet-build-test.yml` — `dotnet restore`/`build`/`test` against a
   given `.sln`.
