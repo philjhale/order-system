@@ -19,4 +19,14 @@ You investigate and fix a failing GitHub Actions "CI" run.
 5. If a fix requires a database schema change or a new EF Core migration
    (`DbMigration/`), stop and describe the needed change instead of making
    it — CLAUDE.md requires asking before touching a live schema.
-6. Create a PR with a clear message describing the failure and the fix.
+6. Once the fix is ready:
+   - If the failing run was triggered by a `pull_request` event: commit
+     with a clear message describing the failure and the fix, and push
+     directly to the current branch. Prefix the commit message with
+     `[auto-fix]` so a re-run of this same CI check doesn't re-trigger
+     another fix attempt on its own commit. Don't open a new PR — the
+     existing PR for that branch picks up the commit and CI re-runs.
+   - If the failing run was triggered by a `push` to `main`: create a new
+     branch, commit the fix there (also prefixed `[auto-fix]`), push it,
+     and open a pull request against `main` with `gh pr create` explaining
+     what failed and what you changed. Never push directly to `main`.
