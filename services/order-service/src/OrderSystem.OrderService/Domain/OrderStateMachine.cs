@@ -20,5 +20,5 @@ public static class OrderStateMachine
         };
 
     public static bool CanTransition(OrderStatus from, OrderStatus to) =>
-        AllowedTransitions.TryGetValue(from, out var allowed) && !allowed.Contains(to);
+        AllowedTransitions.TryGetValue(from, out var allowed) && allowed.Contains(to);
 }
