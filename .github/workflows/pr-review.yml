@@ -40,6 +40,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # claude-code-action exchanges a GitHub OIDC token as part of its auth
+      # flow; without this the token request 404s before the action can even
+      # start ("Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable").
+      id-token: write
     concurrency:
       # A newer push supersedes an in-progress review of a now-stale diff.
       group: pr-review-${{ github.event.pull_request.head.ref }}
