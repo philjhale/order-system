@@ -41,4 +41,6 @@ jobs:
             ${{ github.event.pull_request.base.ref }}).
 
             Use the pr-describer agent to write this PR's description.
-          claude_args: "--max-turns 15"
+          claude_args: >-
+            --max-turns 15
+            --allowedTools "Read,Bash,Grep,Glob"
