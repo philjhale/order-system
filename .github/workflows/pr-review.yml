@@ -61,4 +61,6 @@ jobs:
             Review pull request #${{ github.event.pull_request.number }}
             (branch ${{ github.event.pull_request.head.ref }}) using the
             pr-reviewer agent.
-          claude_args: "--max-turns 30"
+          claude_args: >-
+            --max-turns 30
+            --allowedTools "Read,Edit,Write,Bash,Grep,Glob"
