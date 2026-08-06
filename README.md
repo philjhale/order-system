@@ -7,6 +7,8 @@ events with no central orchestrator, while keeping
 inventory and payment state consistent under at-least-once, out-of-order
 event delivery. Full requirements, scope, data model, and event flow: [docs/SPEC.md](docs/SPEC.md).
 
+Some learnings recorded in [docs/learnings.md](docs/learnings.md).
+
 ## Setup
 
 There's no local docker-compose stack — each service runs as an Azure
