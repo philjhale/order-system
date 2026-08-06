@@ -1,0 +1,44 @@
+name: PR Description
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  # claude-code-action exchanges a GitHub OIDC token as part of its auth
+  # flow; without this the token request 404s before the action can even
+  # start ("Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable").
+  id-token: write
+
+concurrency:
+  # Regenerates the description in full on every push, so a second run for
+  # the same PR (another push before the first run finishes) should cancel
+  # the stale one rather than have both race to overwrite the body.
+  group: pr-description-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  describe:
+    # Fork PRs get a read-only GITHUB_TOKEN under the pull_request event
+    # regardless of the permissions block above, so `gh pr edit` would
+    # fail anyway — same rationale as auto-fix-ci.yml's fork exclusion.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: anthropics/claude-code-action@2e73e92cab539244e5b922807a184ce24ad5a5cc # v1.0.185
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            PR #${{ github.event.pull_request.number }} in
+            ${{ github.repository }} was just
+            ${{ github.event.action }} (head:
+            ${{ github.event.pull_request.head.ref }}, base:
+            ${{ github.event.pull_request.base.ref }}).
+
+            Use the pr-describer agent to write this PR's description.
+          claude_args: "--max-turns 15"
