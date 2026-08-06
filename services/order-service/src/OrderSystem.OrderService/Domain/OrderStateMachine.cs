@@ -13,7 +13,7 @@ public static class OrderStateMachine
         {
             [OrderStatus.Created] = new HashSet<OrderStatus> { OrderStatus.Reserved, OrderStatus.Cancelled },
             [OrderStatus.Reserved] = new HashSet<OrderStatus> { OrderStatus.Confirmed, OrderStatus.Cancelled },
-            [OrderStatus.Confirmed] = new HashSet<OrderStatus> { OrderStatus.Shipped },
+            [OrderStatus.Confirmed] = new HashSet<OrderStatus>(),
             [OrderStatus.Shipped] = new HashSet<OrderStatus> { OrderStatus.Delivered },
             [OrderStatus.Delivered] = new HashSet<OrderStatus>(),
             [OrderStatus.Cancelled] = new HashSet<OrderStatus>(),
